@@ -3,6 +3,7 @@ module Types where
 import Data.List
 import Data.Maybe
 import Control.Applicative
+import Data.Tuple (swap)
 
 data Type = 
   F Type Type
@@ -34,7 +35,7 @@ instance Show Type where
   show Int = "i"
   show WildCard = "*"
   show (Pattern t) = "p [" ++ (show t) ++ "]"
-  show (OneOf t) = "? [" ++ (show t) ++ "]"
+  show (OneOf ts) = "?" ++ (show ts)
   show (Param n) = "param#" ++ (show n)
 
 number = OneOf [Float, Int]
@@ -112,31 +113,47 @@ fits _ String _ String = True
 
 fits _ _ _ _ = False
 
-resolve :: (([Type], Type), ([Type], Type)) -> (([Type], Type), ([Type], Type))
+simplify :: Type -> Type
+simplify x@(OneOf []) = x -- shouldn't happen..
+simplify (OneOf (x:[])) = x
+simplify (OneOf xs) = OneOf $ nub xs
+simplify x = x
 
-resolve ((pA, a), (pB, Param nB)) = 
-  (a', (setIndex pB' nB b', Param nB))
-  where (a', (pB', b')) = resolve ((pA, a), (pB, pB !! nB))
+resolve :: ([Type], Type) -> ([Type], Type) -> ([Type], Type)
 
-resolve ((pA, Param nA), (pB, b)) = 
-  ((setIndex pA' nA a', Param nA), b')
-  where ((pA', a'), b') = resolve ((pA, pA !! nA), (pB, b))
+resolve (pA, F iA oA) (pB, F iB oB) = (pA'', F i o)
+  where (pA', i) = resolve (pA, iA) (pB, iB)
+        (pA'', o) = resolve (pA', oA) (pB, oB)
 
-resolve x@((pA, WildCard), (pB, WildCard)) = x
-resolve ((pA, WildCard), (pB, b)) = ((pA, b), (pB, b))
-resolve ((pA, a), (pB, WildCard)) = ((pA, a), (pB, a))
+resolve (pA, Param nA) (pB, b) = (setIndex pA' nA a', Param nA)
+  where (pA', a') = resolve (pA, pA !! nA) (pB, b) 
 
-resolve ((pA, OneOf as), (pB, OneOf bs)) = 
-  resolve ((pA, fst match), (pB, snd match))
-  where match = head $ matchPairs (\a b -> fits pA a pB b) as bs
+resolve (pA, a) (pB, Param nB) = resolve (pA, a) (pB, pB !! nB)
 
+-- TODO - support Params inside OneOfs
+resolve (pA, OneOf as) (pB, b) = (pA, simplify t)
+  where t = OneOf $ map (\a -> snd $ resolve (pA, a) (pB, b)) matches
+        matches = filter (\a -> fits pA a pB b) as 
+
+resolve (pA, a) (pB, OneOf bs) = (pA, simplify t)
+  where t = OneOf $ map (\b -> snd $ resolve (pA, a) (pB, b)) matches
+        matches = filter (\b -> fits pA a pB b) bs 
+
+resolve a (_, WildCard) = a
+resolve (_, WildCard) b = b
+
+--  resolve ((pA, fst match), (pB, snd match))
+--  where match = head $ matchPairs (\a b -> fits pA a pB b) as bs
+
+{-
 -- Bit of a cheat?
 resolve ((pA, a), (pB, OneOf bs)) = 
   resolve ((pA, OneOf [a]), (pB, OneOf bs))
 resolve ((pA, OneOf as), (pB, b)) = 
   resolve ((pA, OneOf as), (pB, OneOf [b]))
+-}
 
-resolve a = a
+resolve a b = a
 
 matchPairs :: (a -> b -> Bool) -> [a] -> [b] -> [(a,b)]
 matchPairs _  [] _  =  []
@@ -148,8 +165,9 @@ matchPairs eq xs ys =  [(x,y) | x <- xs, y <- ys, eq x y]
 
 -- replace element i in xs with x
 setIndex :: [a] -> Int -> a -> [a]
-setIndex xs i x = (take (i-1) xs) ++ (x:(drop i xs))
+setIndex xs i x = (take (i) xs) ++ (x:(drop (i+1) xs))
 
+{-
 resolve' :: (Type, Type) -> (Type, Type)
 
 resolve' (WildCard, WildCard) = (WildCard, WildCard)
@@ -160,7 +178,7 @@ resolve' (OneOf as, OneOf bs) =
   (OneOf $ intersect as bs, OneOf $ intersect as bs)
 resolve' (a, OneOf bs) = (a, a)
 resolve' (OneOf as, b) = (b, b)
-
+-}
 
 lookupParam :: [Type] -> Type -> Type
 lookupParam pX (Param n) = pX !! n
@@ -200,22 +218,22 @@ link things = fmap (updateLink . snd) $ maybeHead $ sortByFst $
 
 updateLink :: (Thing, Thing) -> (Thing, Thing)
 updateLink (a, b) = (a {next = Just b, 
-                        params = pA,
-                        is = tA,
-                        applied_as = result (applied_as a)
+                        params = p,
+                        is = t,
+                        applied_as = output (applied_as a)
                        }, 
-                     b {prev = Just a,
-                        params = pB,
-                        is = tB
+                     b {prev = Just a
                        }
                     )
-  where ((pA, tA), (pB, tB)) = resolve ((params a, is a), (params b, is b))
+  where (p, t) = resolve (params a, input $ applied_as a) (params b, is b)
 
+output :: Type -> Type
+output (F _ x) = x
+output _ = error "No output from non-function"
 
-
-result :: Type -> Type
-result (F _ x) = x
-result _ = error "No result of non-function"
+input :: Type -> Type
+input (F x _) = x
+input_ = error "No input to non-function"
 
 maybeHead [] = Nothing
 maybeHead (x:_) = Just x
