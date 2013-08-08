@@ -8,11 +8,12 @@ import Data.Array.IArray
 
 import Graphics.UI.SDL
 import Graphics.UI.SDL.Image
+import qualified Graphics.UI.SDL.Primitives as SDLP
 import qualified Graphics.UI.SDL.TTF.General as TTFG
 import Graphics.UI.SDL.TTF.Management
 import Graphics.UI.SDL.TTF.Render
 import Graphics.UI.SDL.TTF.Types
-import Data.Maybe (listToMaybe, fromMaybe, isJust)
+import Data.Maybe (listToMaybe, fromMaybe, fromJust, isJust)
 
 import qualified Texture.Types as T
 
@@ -21,13 +22,31 @@ screenHeight = 480
 screenBpp    = 32
 
 data Word = Word {ident :: Int,
-                  label :: String,
+                  token :: String,
                   location :: (Float, Float),
                   size :: (Float, Float),
                   mousePos :: Maybe (Float, Float)
                  }
+           deriving Show
 
-type Scene = [Word]
+data Scene = Scene {source :: [Word],
+                    parsed :: [T.Datum]
+                   }
+           deriving Show
+
+parseScene :: [Word] -> Scene
+parseScene ws = Scene ws (T.build $ map wordToDatum ws)
+
+wordToDatum :: Word -> T.Datum
+wordToDatum w = T.Datum {T.ident = ident w,
+                         T.token = token w,
+                         T.location = location w,
+                         T.parentId = Nothing,
+                         T.childId = Nothing,
+                         T.sig  = s,
+                         T.applied_as = s
+                        }
+  where s = T.stringToSig (token w)
 
 toScreen :: (Float, Float) -> (Int, Int)
 toScreen (x, y) = (floor (x * (fromIntegral screenWidth)),
@@ -39,56 +58,61 @@ fromScreen (x, y) = ((fromIntegral x) / (fromIntegral screenWidth),
                      (fromIntegral y) / (fromIntegral screenHeight)
                     )
 
-clearMouseOffset :: Scene -> Scene
+withSource :: Scene -> ([Word] -> [Word]) -> Scene
+withSource s f = s {source = f $ source s}
+
+clearMouseOffset :: [Word] -> [Word]
 clearMouseOffset = map (\instruction -> instruction {mousePos = Nothing})
 
-setMouseOffset :: Scene -> (Float, Float) -> Scene
-setMouseOffset scene (x,y) = 
-  fromMaybe scene $ do i <- instructionAt scene (x,y)
-                       let x' = x - (fst $ location i)
-                           y' = y - (snd $ location i)
-                       return $ setWord scene $ i {mousePos = Just (x',y')}
+setMouseOffset :: [Word] -> (Float, Float) -> [Word]
+setMouseOffset ws (x,y) = 
+  fromMaybe ws $ do i <- instructionAt ws (x,y)
+                    let x' = x - (fst $ location i)
+                        y' = y - (snd $ location i)
+                    return $ setWord ws $ i {mousePos = Just (x',y')}
 
-moveWord :: Scene -> (Float, Float) -> Scene
-moveWord scene (x,y) =  
-  fromMaybe scene $ do i <- moving scene
-                       (xOffset, yOffset) <- mousePos i
-                       let x' = x - xOffset
-                           y' = y - yOffset
-                       return $ setWord scene $ i {location = (x',y')}
+moveWord :: [Word] -> (Float, Float) -> [Word]
+moveWord ws (x,y) =  
+  fromMaybe ws $ do i <- moving ws
+                    (xOffset, yOffset) <- mousePos i
+                    let x' = x - xOffset
+                        y' = y - yOffset
+                    return $ setWord ws $ i {location = (x',y')}
 
 inWord :: (Float, Float) -> Word -> Bool
 inWord (px,py) Word {size = (w,h), location = (x,y)} =
   and [px >= x, py >= y, px < x+w, py < y+h]
 
-instructionAt :: Scene -> (Float, Float) -> Maybe Word
-instructionAt scene location = listToMaybe $ filter (inWord location) scene
+instructionAt :: [Word] -> (Float, Float) -> Maybe Word
+instructionAt ws location = listToMaybe $ filter (inWord location) ws
 
-moving :: Scene -> Maybe Word
-moving scene = listToMaybe $ filter (isJust . mousePos) scene
+moving :: [Word] -> Maybe Word
+moving = listToMaybe . (filter (isJust . mousePos))
 
-setWord :: Scene -> Word -> Scene
+setWord :: [Word] -> Word -> [Word]
 setWord [] _ = []
 setWord (x:xs) i | ident x == ident i = (i:xs)
-                        | otherwise = x:(setWord xs i)
+                 | otherwise = x:(setWord xs i)
 
 isInside :: Integral a => Rect -> a -> a -> Bool
 isInside (Rect rx ry rw rh) x y = (x' > rx) && (x' < rx + rw) && (y' > ry) && (y' < ry + rh)
  where (x', y') = (fromIntegral x, fromIntegral y)
 
 handleEvent :: Scene -> Event -> Scene
-handleEvent scene (MouseMotion x y _ _) = moveWord scene (fromScreen (fromIntegral x, fromIntegral y)) 
+handleEvent scene (MouseMotion x y _ _) = 
+  parseScene $ source $ withSource scene (\ws -> moveWord ws (fromScreen (fromIntegral x, fromIntegral y)))
 
 handleEvent scene (MouseButtonDown x y ButtonLeft) = 
-  setMouseOffset scene (fromScreen (fromIntegral x, fromIntegral y))
+  withSource scene (\ws -> setMouseOffset ws (fromScreen (fromIntegral x, fromIntegral y)))
 	
-handleEvent scene (MouseButtonUp x y ButtonLeft) = clearMouseOffset $ scene
+handleEvent scene (MouseButtonUp x y ButtonLeft) = 
+  withSource scene clearMouseOffset
 
 handleEvent scene _ = scene
 
 data AppConfig = AppConfig {
-    screen       :: Surface,
-    font         :: Font
+  screen       :: Surface,
+  font         :: Font
 }
 
 type AppState = StateT Scene IO
@@ -105,19 +129,26 @@ initEnv = do
     setCaption "Texture" []
     return $ AppConfig screen font
 
-showScene :: Scene -> Font -> Surface -> IO ()
-showScene scene font screen = 
-  mapM_ (\i -> 
-          do let (x, y) = toScreen $ location i
-                 (w, h) = toScreen $ size i
-             fillRect screen (Just $ Rect x y w h) (Pixel 0x00333333)
-             message <- renderTextSolid font (label i) textColor
-             applySurface 
-               (floor $ (fromIntegral screenWidth) * (fst $ location i)) 
-               (floor $ (fromIntegral screenHeight) * (snd $ location i)) 
-               message screen Nothing
-        ) scene
+drawScene :: Scene -> Font -> Surface -> IO ()
+drawScene scene font screen = 
+  do mapM_ (\i -> 
+             do let (x, y) = toScreen $ location i
+                    (w, h) = toScreen $ size i
+                fillRect screen (Just $ Rect x y w h) (Pixel 0x00333333)
+                message <- renderTextSolid font (token i) textColor
+                applySurface 
+                  (floor $ (fromIntegral screenWidth) * (fst $ location i)) 
+                  (floor $ (fromIntegral screenHeight) * (snd $ location i)) 
+                  message screen Nothing
+           ) (source scene)
+     mapM_ (\d ->
+             do let (x1, y1) = toScreen $ T.location d
+                    (x2, y2) = toScreen $ T.location (fromJust $ T.child d (parsed scene))
+                SDLP.aaLine screen (fromIntegral x1) (fromIntegral y1) (fromIntegral x2) (fromIntegral y2) lineColor
+           )
+       (filter T.hasChild $ parsed scene)
   where textColor = Color 255 255 255
+        lineColor = Pixel 0x777777
 
 loop :: AppEnv ()
 loop = do
@@ -132,7 +163,7 @@ loop = do
         bgColor  <- (mapRGB . surfaceGetPixelFormat) screen 0x00 0x00 0x00  
         clipRect <- Just `liftM` getClipRect screen
         fillRect screen clipRect bgColor
-        showScene scene font screen
+        drawScene scene font screen
         Graphics.UI.SDL.flip screen
     
     unless quit loop
@@ -168,4 +199,6 @@ main = withInit [InitEverything] $
                     a <- newWord 0 "+" (0.3, 0.3) (font env)
                     b <- newWord 1 "1" (0.4, 0.4) (font env)
                     c <- newWord 2 "2" (0.5, 0.5) (font env)
-                    runLoop env [a,b,c]
+                    let scene = parseScene [a,b,c]
+                    putStrLn $ show scene
+                    runLoop env scene

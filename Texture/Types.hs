@@ -31,25 +31,28 @@ instance Eq Type where
 data Sig = Sig {params :: [Type],
                 is :: Type
                }
+           deriving Eq
+
 instance Show Sig where
   show s = ps ++ (show $ is s)
     where ps | params s == [] = ""
-             | otherwise = show ps ++ " => "
+             | otherwise = show (params s) ++ " => "
 
 
-functions = [('+', Sig [number] $ F (Param 0) (F (Param 0) (Param 0))),
-             ('-', Sig [number] $ F (Param 0) (F (Param 0) (Param 0))),
-             ('/', Sig [number] $ F (Param 0) (F (Param 0) (Param 0))),
-             ('*', Sig [number] $ F (Param 0) (F (Param 0) (Param 0)))
+functions :: [(String, Sig)]
+functions = [("+", Sig [number] $ F (Param 0) (F (Param 0) (Param 0))),
+             ("-", Sig [number] $ F (Param 0) (F (Param 0) (Param 0))),
+             ("/", Sig [number] $ F (Param 0) (F (Param 0) (Param 0))),
+             ("*", Sig [number] $ F (Param 0) (F (Param 0) (Param 0)))
             ]
 
 data Datum = Datum {ident      :: Int,
-                    name       :: String,
+                    token      :: String,
                     sig        :: Sig,
                     applied_as :: Sig,
                     location   :: (Float, Float),
-                    prev       :: Maybe Datum,
-                    next       :: Maybe Datum
+                    parentId     :: Maybe Int,
+                    childId      :: Maybe Int
                    }
 
 {-
@@ -59,8 +62,8 @@ data Datum = Datum {ident  :: Int,
                     is     :: Type,
                     applied_as :: Type,
                     location :: (Float, Float),
-                    prev   :: Maybe Datum,
-                    next   :: Maybe Datum
+                    parentId   :: Maybe Datum,
+                    childId   :: Maybe Datum
                    }
 -}
 instance Show Type where
@@ -79,6 +82,20 @@ isFunction :: Type -> Bool
 isFunction (F _ _) = True
 isFunction _ = False
 
+hasChild :: Datum -> Bool
+hasChild = isJust . childId
+
+child :: Datum -> [Datum] -> Maybe Datum
+child d ds = do i <- childId d
+                return $ datumByIdent i ds
+
+parent :: Datum -> [Datum] -> Maybe Datum
+parent d ds = do i <- parentId d
+                 return $ datumByIdent i ds
+
+hasParent :: Datum -> Bool
+hasParent = isJust . parentId
+
 type Id = Int
 type Proximity = Float
 
@@ -86,13 +103,15 @@ type Proximity = Float
 instance Show Datum where
   show t = intercalate "\n" $ map (\(s, f) -> s ++ ": " ++ (f t))
                                   [("ident", show . ident),
-                                   ("name", show . name),
+                                   ("token", show . token),
                                    ("signature", show . sig),
                                    ("applied_as", show . applied_as),
-                                   ("location", show . location)
-                                   --("prev", show . prev),
-                                   --("next", show . next)
+                                   ("location", show . location),
+                                   ("parent", showSub . parentId),
+                                   ("child", showSub . childId)
                                   ]
+    where showSub Nothing = "None"
+          showSub (Just i) = "#" ++ (show $ i)
 
 instance Eq Datum where
   a == b = (ident a) == (ident b)
@@ -113,6 +132,11 @@ stringToType s = scanType Int s
                            | otherwise = String
         scanType Float (c:s) | elem c ['0' .. '9'] = scanType Float s
                              | otherwise = String
+
+stringToSig :: String -> Sig
+stringToSig s | t == String = fromMaybe (Sig [] String) $ lookup s functions
+              | otherwise = Sig [] t
+  where t = stringToType s
 
 fits :: Sig -> Sig -> Bool
 fits (Sig _ WildCard) _ = True
@@ -220,37 +244,44 @@ dist a b = sqrt ((sqr $ (fst $ location a) - (fst $ location b))
                  + (sqr $ (snd $ location a) - (snd $ location b))
                 )
 build :: [Datum] -> [Datum]
-build things = set $ link things
-  where set (Just (a,b)) = build $ update a $ update b $ things
-        set Nothing = things
+build things | linked == Nothing = things
+             | otherwise = build $ fromJust linked
+  where linked = link things
 
-link :: [Datum] -> Maybe (Datum, Datum)
-link things = fmap (updateLink . snd) $ maybeHead $ sortByFst $ 
-              concatMap dists $ filter (isFunction . is . applied_as) things
-  where dists :: Datum -> [(Float, (Datum, Datum))]
-        dists x
-          = map (\fitter -> (dist x fitter, (x, fitter))) fitters
-          where 
-            fitters = filter 
-                      (\thing -> 
-                        (thing /= x 
-                         && 
-                         fits (applied_as x) (applied_as thing)
-                        )
-                      )
-                      things
-            (F a b) = is $ applied_as x
+link :: [Datum] -> Maybe [Datum]
+link things = fmap ((updateLinks things) . snd) $ maybeHead $ sortByFst $ 
+              concatMap (dists unlinked) $ filter (isFunction . is . applied_as) things
+  where unlinked = filter (not . hasParent) things
+
+dists :: [Datum] -> Datum -> [(Float, (Datum, Datum))]
+dists things x = map (\fitter -> (dist x fitter, (x, fitter))) fitters
+  where 
+    fitters = filter 
+              (\thing -> 
+                (thing /= x 
+                 && 
+                 fits (input $ applied_as x) (applied_as thing)
+                )
+              )
+              things
 
 -- Apply b to a, and resolve the wildcards and "oneof"s
 
-updateLink :: (Datum, Datum) -> (Datum, Datum)
-updateLink (a, b) = (a {next = Just b, 
-                        sig = s,
-                        applied_as = output (applied_as a)
-                       }, 
-                     b {prev = Just a}
-                    )
+updateLinks :: [Datum] -> (Datum, Datum) -> [Datum]
+updateLinks ds (a, b) = appendChild ds' (a', b)
   where s = resolve (input $ applied_as a) (applied_as $ b)
+        a' = a {applied_as = (output (applied_as a)) {params = params s}}
+        ds' = update a' ds
+
+
+appendChild :: [Datum] -> (Datum, Datum) -> [Datum]
+appendChild ds (a, b) | hasChild a = appendChild ds (datumByIdent (fromJust $ childId a) ds, b)
+                      | otherwise = update a' $ update b' $ ds
+  where a' = a {childId = Just $ ident b}
+        b' = b {parentId = Just $ ident a}
+
+datumByIdent :: Int -> [Datum] -> Datum
+datumByIdent i ds = head $ filter (\d -> ident d == i) ds
 
 output :: Sig -> Sig
 output (Sig ps (F _ x)) = Sig ps x

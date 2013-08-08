@@ -1,28 +1,27 @@
 
-import Types
+import Texture.Types
 
-tests = and [fits [Int, Float,WildCard] (Param 0) [] Int,
-             not $ fits [Int, Float,WildCard] (Param 1) [] Int,
-             fits [Int, Float,WildCard] (Param 2) [] Int,
-             not $ fits [] (Pattern Int) [] (Pattern String),
-             fits [] (Pattern Int) [] (Pattern Int),
-             fits [] (OneOf [Int, String]) [] (OneOf [Int, Float]),
-             fits [] (OneOf [Int, String]) [] String
+tests = and [fits (Sig [Int, Float,WildCard] (Param 0)) (Sig [] Int),
+             not $ fits (Sig [Int, Float,WildCard] (Param 1)) (Sig [] Int),
+             fits (Sig [Int, Float,WildCard] (Param 2)) (Sig [] Int),
+             not $ fits (Sig [] (Pattern Int)) (Sig [] (Pattern String)),
+             fits (Sig [] (Pattern Int)) (Sig [] (Pattern Int)),
+             fits (Sig [] (OneOf [Int, String])) (Sig [] (OneOf [Int, Float])),
+             fits (Sig [] (OneOf [Int, String])) (Sig [] String)
             ]
 
-things :: [Thing]
-things = [Thing 0 "hello" [] String String (0,1) Nothing Nothing,
-          Thing 1 "38" [] Int Int (23,4) Nothing Nothing,
-          Thing 2 "32" [] Int Int (4,5) Nothing Nothing,
-          Thing 3 "38" [] Int Int (5,44) Nothing Nothing,
-          Thing 4 "58" [] Int Int (2,2) Nothing Nothing,
-          Thing 5 "38" [] Int Int (2,3) Nothing Nothing,
-          Thing 6 "+" [number] (F (Param 0) 
-                                (F (Param 0) (Param 0))
-                               ) 
-                               (F (Param 0) 
-                                (F (Param 0) (Param 0))
-                               ) (2,4) Nothing Nothing
-         -- Thing 7 "*" [] (F Int (F Int Int)) (F Int (F Int Int)) (54,4) Nothing Nothing
+things :: [Datum]
+things = [--Datum 0 "hello" (Sig [] String) (Sig [] String) (0,1) Nothing Nothing,
+          Datum 1 "38" (Sig [] Int) (Sig [] Int) (23,4) Nothing Nothing,
+          Datum 2 "30" (Sig [] Int) (Sig [] Int) (23,6) Nothing Nothing,
+          Datum 6 "+" (Sig [number] (F (Param 0) 
+                                     (F (Param 0) (Param 0))
+                                    ))
+                      (Sig [number] (F (Param 0) 
+                                     (F (Param 0) (Param 0))
+                                    ))
+                      (2,4)
+                      Nothing Nothing
+         -- Datum 7 "*" [] (F Int (F Int Int)) (F Int (F Int Int)) (54,4) Nothing Nothing
          ]
 
