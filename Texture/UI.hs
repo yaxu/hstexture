@@ -14,7 +14,7 @@ import Graphics.UI.SDL.TTF.Management
 import Graphics.UI.SDL.TTF.Render
 import Graphics.UI.SDL.TTF.Types
 import Data.Maybe (listToMaybe, fromMaybe, fromJust, isJust)
-
+import GHC.Int (Int16)
 import qualified Texture.Types as T
 
 screenWidth  = 640
@@ -52,6 +52,11 @@ toScreen :: (Float, Float) -> (Int, Int)
 toScreen (x, y) = (floor (x * (fromIntegral screenWidth)),
                    floor (y * (fromIntegral screenHeight))
                   )
+
+toScreen16 :: (Float, Float) -> (Int16, Int16)
+toScreen16 (x, y) = (fromIntegral $ floor (x * (fromIntegral screenWidth)),
+                     fromIntegral $ floor (y * (fromIntegral screenHeight))
+                    )
 
 fromScreen :: (Int, Int) -> (Float, Float)
 fromScreen (x, y) = ((fromIntegral x) / (fromIntegral screenWidth),
@@ -142,13 +147,28 @@ drawScene scene font screen =
                   message screen Nothing
            ) (source scene)
      mapM_ (\d ->
-             do let (x1, y1) = toScreen $ T.location d
-                    (x2, y2) = toScreen $ T.location (fromJust $ T.child d (parsed scene))
-                SDLP.aaLine screen (fromIntegral x1) (fromIntegral y1) (fromIntegral x2) (fromIntegral y2) lineColor
+             do let (x1, y1) = T.location d
+                    (x2, y2) = T.location (fromJust $ T.child d (parsed scene))
+                (thickLine 0.01 x1 y1 x2 y2) screen lineColor
            )
        (filter T.hasChild $ parsed scene)
   where textColor = Color 255 255 255
         lineColor = Pixel 0x777777
+
+thickLine :: Float -> Float -> Float -> Float -> Float -> (Surface -> Pixel -> IO Bool)
+thickLine thickness x1 y1 x2 y2 = \s p -> do SDLP.filledPolygon s (map toScreen16 coords) p
+                                             SDLP.aaPolygon s (map toScreen16 coords) p
+  where x = x2 - x1
+        y = y2 - y1
+        l = sqrt $ x*x+y*y
+        ox = (thickness * (y2-y1) / l)/2
+        oy = (thickness * (x1-x2) / l)/2
+        coords = [(x1 + ox, y1 + oy),
+                  (x2 + ox, y2 + oy),
+                  (x2 - ox, y2 - oy),
+                  (x1 - ox, y1 - oy)
+                 ]
+
 
 loop :: AppEnv ()
 loop = do
