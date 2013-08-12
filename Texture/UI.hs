@@ -17,9 +17,11 @@ import Data.Maybe (listToMaybe, fromMaybe, fromJust, isJust)
 import GHC.Int (Int16)
 import qualified Texture.Types as T
 
-screenWidth  = 640
-screenHeight = 480
+screenWidth  = 1024
+screenHeight = 768
 screenBpp    = 32
+
+xDivider = 0.85
 
 data Word = Word {ident :: Int,
                   token :: String,
@@ -42,7 +44,7 @@ wordToDatum w = T.Datum {T.ident = ident w,
                          T.token = token w,
                          T.location = location w,
                          T.parentId = Nothing,
-                         T.childId = Nothing,
+                         T.childIds = [],
                          T.sig  = s,
                          T.applied_as = s
                         }
@@ -80,8 +82,9 @@ moveWord :: [Word] -> (Float, Float) -> [Word]
 moveWord ws (x,y) =  
   fromMaybe ws $ do i <- moving ws
                     (xOffset, yOffset) <- mousePos i
-                    let x' = x - xOffset
-                        y' = y - yOffset
+                    let (w,h) = size i
+                    let x' = max 0 $ min (xDivider - w) (x - xOffset)
+                        y' = max 0 $ min (1 - h) $ y - yOffset
                     return $ setWord ws $ i {location = (x',y')}
 
 inWord :: (Float, Float) -> Word -> Bool
@@ -146,10 +149,13 @@ drawScene scene font screen =
                   (floor $ (fromIntegral screenHeight) * (snd $ location i)) 
                   message screen Nothing
            ) (source scene)
-     mapM_ (\d ->
+     mapM_ (\d -> 
              do let (x1, y1) = T.location d
-                    (x2, y2) = T.location (fromJust $ T.child d (parsed scene))
-                (thickLine 0.01 x1 y1 x2 y2) screen lineColor
+                mapM_ (\childId -> do 
+                          let (x2, y2) = T.location (T.datumByIdent childId (parsed scene))
+                          (thickLine 0.01 x1 y1 x2 y2) screen lineColor
+                      
+                      ) (T.childIds d)
            )
        (filter T.hasChild $ parsed scene)
   where textColor = Color 255 255 255
@@ -158,16 +164,24 @@ drawScene scene font screen =
 thickLine :: Float -> Float -> Float -> Float -> Float -> (Surface -> Pixel -> IO Bool)
 thickLine thickness x1 y1 x2 y2 = \s p -> do SDLP.filledPolygon s (map toScreen16 coords) p
                                              SDLP.aaPolygon s (map toScreen16 coords) p
+                                             SDLP.filledPolygon s (map toScreen16 arrowCoords) p
+                                             SDLP.aaPolygon s (map toScreen16 arrowCoords) p
   where x = x2 - x1
         y = y2 - y1
+        headx = (x/l) / 20
+        heady = (y/l) / 20
         l = sqrt $ x*x+y*y
         ox = (thickness * (y2-y1) / l)/2
         oy = (thickness * (x1-x2) / l)/2
         coords = [(x1 + ox, y1 + oy),
-                  (x2 + ox, y2 + oy),
-                  (x2 - ox, y2 - oy),
+                  ((x2 + ox) - headx, (y2 + oy) - heady),
+                  ((x2 - ox) - headx, (y2 - oy) - heady),
                   (x1 - ox, y1 - oy)
                  ]
+        arrowCoords = [((x2 + ox*2) - headx, (y2 + oy*2) - heady),
+                       ((x2 - ox*2) - headx, (y2 - oy*2) - heady),
+                       (x2, y2)
+                      ]
 
 
 loop :: AppEnv ()
@@ -183,6 +197,7 @@ loop = do
         bgColor  <- (mapRGB . surfaceGetPixelFormat) screen 0x00 0x00 0x00  
         clipRect <- Just `liftM` getClipRect screen
         fillRect screen clipRect bgColor
+        SDLP.aaLine screen (floor $ xDivider * (fromIntegral screenWidth)) 0 (floor $ xDivider * (fromIntegral screenWidth)) (fromIntegral screenHeight) (Pixel 0x00ffffff)
         drawScene scene font screen
         Graphics.UI.SDL.flip screen
     
@@ -219,6 +234,8 @@ main = withInit [InitEverything] $
                     a <- newWord 0 "+" (0.3, 0.3) (font env)
                     b <- newWord 1 "1" (0.4, 0.4) (font env)
                     c <- newWord 2 "2" (0.5, 0.5) (font env)
-                    let scene = parseScene [a,b,c]
+                    d <- newWord 3 "*" (0.6, 0.7) (font env)
+                    e <- newWord 4 "4" (0.6, 0.3) (font env)
+                    let scene = parseScene [a,b,c,d,e]
                     putStrLn $ show scene
                     runLoop env scene

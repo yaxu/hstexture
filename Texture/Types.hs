@@ -5,6 +5,11 @@ import Data.Maybe
 import Control.Applicative
 import Data.Tuple (swap)
 
+
+--type Id = Int
+--type Proximity = Float
+
+
 data Type = 
   F Type Type
   | String
@@ -51,8 +56,9 @@ data Datum = Datum {ident      :: Int,
                     sig        :: Sig,
                     applied_as :: Sig,
                     location   :: (Float, Float),
-                    parentId     :: Maybe Int,
-                    childId      :: Maybe Int
+                    parentId   :: Maybe Int,
+                    --childId      :: Maybe Int,
+                    childIds :: [Int]
                    }
 
 {-
@@ -82,23 +88,18 @@ isFunction :: Type -> Bool
 isFunction (F _ _) = True
 isFunction _ = False
 
-hasChild :: Datum -> Bool
-hasChild = isJust . childId
-
-child :: Datum -> [Datum] -> Maybe Datum
-child d ds = do i <- childId d
-                return $ datumByIdent i ds
-
 parent :: Datum -> [Datum] -> Maybe Datum
 parent d ds = do i <- parentId d
                  return $ datumByIdent i ds
 
+children :: Datum -> [Datum] -> [Datum]
+children d ds = map (\childId -> datumByIdent childId ds) (childIds d)
+
 hasParent :: Datum -> Bool
 hasParent = isJust . parentId
 
-type Id = Int
-type Proximity = Float
-
+hasChild :: Datum -> Bool
+hasChild d = not $ childIds d == []
 
 instance Show Datum where
   show t = intercalate "\n" $ map (\(s, f) -> s ++ ": " ++ (f t))
@@ -106,9 +107,10 @@ instance Show Datum where
                                    ("token", show . token),
                                    ("signature", show . sig),
                                    ("applied_as", show . applied_as),
+                                   ("applied", show . childIds),
                                    ("location", show . location),
                                    ("parent", showSub . parentId),
-                                   ("child", showSub . childId)
+                                   ("children", show . childIds)
                                   ]
     where showSub Nothing = "None"
           showSub (Just i) = "#" ++ (show $ i)
@@ -275,9 +277,8 @@ updateLinks ds (a, b) = appendChild ds' (a', b)
 
 
 appendChild :: [Datum] -> (Datum, Datum) -> [Datum]
-appendChild ds (a, b) | hasChild a = appendChild ds (datumByIdent (fromJust $ childId a) ds, b)
-                      | otherwise = update a' $ update b' $ ds
-  where a' = a {childId = Just $ ident b}
+appendChild ds (a, b) = update a' $ update b' $ ds
+  where a' = a {childIds = (ident b):(childIds a)}
         b' = b {parentId = Just $ ident a}
 
 datumByIdent :: Int -> [Datum] -> Datum
