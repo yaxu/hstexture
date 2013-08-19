@@ -17,19 +17,30 @@ import Data.Maybe (listToMaybe, fromMaybe, fromJust, isJust)
 import GHC.Int (Int16)
 import qualified Texture.Types as T
 
-screenWidth  = 1024
-screenHeight = 768
+import Texture.Utils
+
+screenWidth  = 640
+screenHeight = 480
 screenBpp    = 32
 
 xDivider = 0.85
+
+data WordStatus = Active
+                | Tentative
+                | MenuItem
+                deriving (Show, Eq)
 
 data Word = Word {ident :: Int,
                   token :: String,
                   location :: (Float, Float),
                   size :: (Float, Float),
-                  mousePos :: Maybe (Float, Float)
+                  mousePos :: Maybe (Float, Float),
+                  status :: WordStatus
                  }
            deriving Show
+
+instance Eq Word where
+  (Word {ident = a}) == (Word {ident = b}) = a == b
 
 data Scene = Scene {source :: [Word],
                     parsed :: [T.Datum]
@@ -37,7 +48,10 @@ data Scene = Scene {source :: [Word],
            deriving Show
 
 parseScene :: [Word] -> Scene
-parseScene ws = Scene ws (T.build $ map wordToDatum ws)
+parseScene ws = Scene ws (T.build $ map wordToDatum (filterActive ws))
+
+nextIdent :: [Word] -> Int
+nextIdent ws = head $ filter (\i -> null $ filter ((== i) . ident) ws) [0 ..]
 
 wordToDatum :: Word -> T.Datum
 wordToDatum w = T.Datum {T.ident = ident w,
@@ -68,8 +82,20 @@ fromScreen (x, y) = ((fromIntegral x) / (fromIntegral screenWidth),
 withSource :: Scene -> ([Word] -> [Word]) -> Scene
 withSource s f = s {source = f $ source s}
 
+withActive :: Scene -> ([Word] -> [Word]) -> Scene
+withActive s f = withSource s (f . filterActive)
+
+filterActive :: [Word] -> [Word]
+filterActive = (filter ((== Active) . status))
+
 clearMouseOffset :: [Word] -> [Word]
-clearMouseOffset = map (\instruction -> instruction {mousePos = Nothing})
+clearMouseOffset = (map clearTentative) . (map f) . (filter filtF)
+  where f i = i {mousePos = Nothing}
+        filtF i@(Word {status = Tentative, location = (x,_), size = (w,_)}) 
+          = (x + w) <= xDivider
+        filtF _ = True
+        clearTentative i@(Word {status = Tentative}) = i {status = Active}
+        clearTentative i = i
 
 setMouseOffset :: [Word] -> (Float, Float) -> [Word]
 setMouseOffset ws (x,y) = 
@@ -78,14 +104,28 @@ setMouseOffset ws (x,y) =
                         y' = y - (snd $ location i)
                     return $ setWord ws $ i {mousePos = Just (x',y')}
 
-moveWord :: [Word] -> (Float, Float) -> [Word]
-moveWord ws (x,y) =  
-  fromMaybe ws $ do i <- moving ws
-                    (xOffset, yOffset) <- mousePos i
-                    let (w,h) = size i
-                    let x' = max 0 $ min (xDivider - w) (x - xOffset)
-                        y' = max 0 $ min (1 - h) $ y - yOffset
-                    return $ setWord ws $ i {location = (x',y')}
+moveWord :: [Word] -> (Float, Float) -> AppEnv [Word]
+moveWord ws (x,y) | w == Nothing = return ws
+                  | otherwise = moveWord' ws (x,y) (fromJust w)
+  where w = moving ws
+
+moveWord' :: [Word] -> (Float, Float) -> Word -> AppEnv [Word]
+moveWord' ws loc wd@(Word {status = MenuItem}) = 
+  do liftIO $ putStrLn $ show ws'
+     moveWord' ws' loc newWord
+  where newWord = wd {status = Tentative, ident = nextIdent ws}
+        ws' = newWord:(clearMouseOffset ws)
+
+moveWord' ws (x,y) wd =
+  return $ fromMaybe ws $ 
+       do (xOffset, yOffset) <- mousePos wd
+          let (w,h) = size wd
+              x' | status wd == Tentative = (x-xOffset)
+                 | otherwise = max 0 $ min (xDivider - w) (x - xOffset)
+              y' = max 0 $ min (1 - h) $ y - yOffset
+          return $ setWord ws $ wd {location = (x',y')}
+
+
 
 inWord :: (Float, Float) -> Word -> Bool
 inWord (px,py) Word {size = (w,h), location = (x,y)} =
@@ -106,17 +146,22 @@ isInside :: Integral a => Rect -> a -> a -> Bool
 isInside (Rect rx ry rw rh) x y = (x' > rx) && (x' < rx + rw) && (y' > ry) && (y' < ry + rh)
  where (x', y') = (fromIntegral x, fromIntegral y)
 
-handleEvent :: Scene -> Event -> Scene
+handleEvent :: Scene -> Event -> AppEnv (Scene)
 handleEvent scene (MouseMotion x y _ _) = 
-  parseScene $ source $ withSource scene (\ws -> moveWord ws (fromScreen (fromIntegral x, fromIntegral y)))
+  do let ws = source scene
+     ws' <- moveWord ws (fromScreen (fromIntegral x, fromIntegral y))
+     return $ parseScene ws'
+  
+
+--return $ parseScene $ source $ withSource scene (\ws -> moveWord ws (fromScreen (fromIntegral x, fromIntegral y)))
 
 handleEvent scene (MouseButtonDown x y ButtonLeft) = 
-  withSource scene (\ws -> setMouseOffset ws (fromScreen (fromIntegral x, fromIntegral y)))
+  return $ withSource scene (\ws -> setMouseOffset ws (fromScreen (fromIntegral x, fromIntegral y)))
 	
 handleEvent scene (MouseButtonUp x y ButtonLeft) = 
-  withSource scene clearMouseOffset
+  return $ withSource scene clearMouseOffset
 
-handleEvent scene _ = scene
+handleEvent scene _ = return $ scene
 
 data AppConfig = AppConfig {
   screen       :: Surface,
@@ -186,12 +231,10 @@ thickLine thickness x1 y1 x2 y2 = \s p -> do SDLP.filledPolygon s (map toScreen1
 
 loop :: AppEnv ()
 loop = do
-    quit <- whileEvents $ modify . (Prelude.flip handleEvent)
-    
+    quit <- whileEvents $ act
     screen <- screen `liftM` ask
     font <- font `liftM` ask
     scene <- get
-    
     -- a local lambda so we don't have use liftIO for all the SDL actions used which are in IO.
     liftIO $ do
         bgColor  <- (mapRGB . surfaceGetPixelFormat) screen 0x00 0x00 0x00  
@@ -200,8 +243,10 @@ loop = do
         SDLP.aaLine screen (floor $ xDivider * (fromIntegral screenWidth)) 0 (floor $ xDivider * (fromIntegral screenWidth)) (fromIntegral screenHeight) (Pixel 0x00ffffff)
         drawScene scene font screen
         Graphics.UI.SDL.flip screen
-    
     unless quit loop
+      where act e = do scene <- get 
+                       scene' <- handleEvent scene e
+                       put $ scene'
 
 whileEvents :: MonadIO m => (Event -> m ()) -> m Bool
 whileEvents act = do
@@ -221,21 +266,25 @@ textSize text font =
   do message <- renderTextSolid font text (Color 0 0 0)
      return (fromScreen (surfaceGetWidth message, surfaceGetHeight message))
 
-newWord :: Int -> String -> (Float, Float) -> Font -> IO (Word)
-newWord ident text location font =
-  do (w, h) <- textSize text font
-     return $ Word ident text location (w, h) Nothing
+newWord :: Int -> String -> (Float, Float) -> Font -> WordStatus -> IO (Word)
+newWord ident text location font status = setSize wd font
+  where wd = Word ident text location undefined Nothing status
+
+setSize :: Word -> Font -> IO Word
+setSize wd font = do sz <- textSize (token wd) font
+                     return $ wd {size = sz}
+
+wordMenu :: Font -> [String] -> IO ([Word])
+wordMenu font ws = mapM addWord (enumerate ws)
+  where addWord (n, w) = 
+          newWord n w (0.9, (fromIntegral n) * 0.05) font MenuItem
 
 main = withInit [InitEverything] $ 
        do result <- TTFG.init
           if not result
              then putStrLn "Failed to init ttf"
             else do env <- initEnv
-                    a <- newWord 0 "+" (0.3, 0.3) (font env)
-                    b <- newWord 1 "1" (0.4, 0.4) (font env)
-                    c <- newWord 2 "2" (0.5, 0.5) (font env)
-                    d <- newWord 3 "*" (0.6, 0.7) (font env)
-                    e <- newWord 4 "4" (0.6, 0.3) (font env)
-                    let scene = parseScene [a,b,c,d,e]
+                    ws <- wordMenu (font env) ["+", "*", "1", "2", "3"]
+                    let scene = parseScene ws
                     putStrLn $ show scene
                     runLoop env scene
