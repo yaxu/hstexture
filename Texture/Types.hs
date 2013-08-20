@@ -1,10 +1,12 @@
 module Texture.Types where
 
-import Data.List
 import Data.Maybe
 import Control.Applicative
 import Data.Tuple (swap)
+import Debug.Trace (trace)
+import Data.List (intercalate, intersectBy, nub)
 
+import Texture.Utils
 
 --type Id = Int
 --type Proximity = Float
@@ -33,6 +35,7 @@ instance Eq Type where
   Param a == Param b = a == b
   _ == _ = False
 
+-- Type signature
 data Sig = Sig {params :: [Type],
                 is :: Type
                }
@@ -45,11 +48,21 @@ instance Show Sig where
 
 
 functions :: [(String, Sig)]
-functions = [("+", Sig [number] $ F (Param 0) (F (Param 0) (Param 0))),
-             ("-", Sig [number] $ F (Param 0) (F (Param 0) (Param 0))),
-             ("/", Sig [number] $ F (Param 0) (F (Param 0) (Param 0))),
-             ("*", Sig [number] $ F (Param 0) (F (Param 0) (Param 0)))
-            ]
+functions = 
+  [("+", numOp),
+   ("-", numOp),
+   ("/", numOp),
+   ("*", numOp),
+   ("floor", Sig [] $ F Float Int),
+   ("sinewave", floatPat),
+   ("sinewave1", floatPat),
+   ("fmap", mapper),
+   ("<$>", mapper)
+   ]
+  
+  where numOp = Sig [number] $ F (Param 0) $ F (Param 0) (Param 0)
+        floatPat = Sig [] $ Pattern Float
+        mapper = Sig [WildCard, WildCard] $ F (F (Param 0) (Param 1)) $ F (Pattern (Param 0)) (Pattern (Param 1))
 
 data Datum = Datum {ident      :: Int,
                     token      :: String,
@@ -87,6 +100,9 @@ number = OneOf [Float, Int]
 isFunction :: Type -> Bool
 isFunction (F _ _) = True
 isFunction _ = False
+
+wantsParam :: Datum -> Bool
+wantsParam d = (parentId d) == Nothing && (isFunction $ is $ applied_as $ d)
 
 parent :: Datum -> [Datum] -> Maybe Datum
 parent d ds = do i <- parentId d
@@ -140,6 +156,8 @@ stringToSig s | t == String = fromMaybe (Sig [] String) $ lookup s functions
               | otherwise = Sig [] t
   where t = stringToType s
 
+
+
 fits :: Sig -> Sig -> Bool
 fits (Sig _ WildCard) _ = True
 fits _ (Sig _ WildCard) = True
@@ -172,14 +190,23 @@ simplify (OneOf (x:[])) = x
 simplify (OneOf xs) = OneOf $ nub xs
 simplify x = x
 
+
+-- Resolve type signature a being applied to a function with type
+-- signature b. At this point we know they're compatible, but type
+-- parameters and "OneOf"s need resolving.
+
+(!!!) :: [Type] -> Int -> Type
+a !!! b | b < length a = a !! b
+        | otherwise = error $ "oh dear, " ++ (show $ 1 + b) ++ "th of " ++ show a
+
 resolve :: Sig -> Sig -> Sig
 
 resolve (Sig pA (F iA oA)) (Sig pB (F iB oB)) = Sig pA'' (F i o)
   where Sig pA' i  = resolve (Sig pA iA) (Sig pB iB)
         Sig pA'' o = resolve (Sig pA' oA) (Sig pB oB)
 
-resolve (Sig pA (Param nA)) sb = Sig (setIndex pA' nA a') (Param nA)
-  where (Sig pA' a') = resolve (Sig pA (pA !! nA)) sb
+resolve (Sig pA (Param nA)) sb = Sig (setIndex pA nA a') (Param nA)
+  where (Sig pA' a') = resolve (Sig pA (pA !!! nA)) sb
 
 resolve sa (Sig pB (Param nB)) = resolve sa (Sig pB (pB !! nB))
 
@@ -195,17 +222,6 @@ resolve (Sig pA a) (Sig pB (OneOf bs)) = Sig pA (simplify t)
 resolve a (Sig _ WildCard) = a
 resolve (Sig _ WildCard) b = b
 
---  resolve ((pA, fst match), (pB, snd match))
---  where match = head $ matchPairs (\a b -> fits pA a pB b) as bs
-
-{-
--- Bit of a cheat?
-resolve ((pA, a), (pB, OneOf bs)) = 
-  resolve ((pA, OneOf [a]), (pB, OneOf bs))
-resolve ((pA, OneOf as), (pB, b)) = 
-  resolve ((pA, OneOf as), (pB, OneOf [b]))
--}
-
 resolve a b = a
 
 matchPairs :: (a -> b -> Bool) -> [a] -> [b] -> [(a,b)]
@@ -220,21 +236,9 @@ matchPairs eq xs ys =  [(x,y) | x <- xs, y <- ys, eq x y]
 setIndex :: [a] -> Int -> a -> [a]
 setIndex xs i x = (take (i) xs) ++ (x:(drop (i+1) xs))
 
-{-
-resolve' :: (Type, Type) -> (Type, Type)
-
-resolve' (WildCard, WildCard) = (WildCard, WildCard)
-resolve' (a, WildCard) = (a, a)
-resolve' (WildCard, b) = (b, b)
-
-resolve' (OneOf as, OneOf bs) = 
-  (OneOf $ intersect as bs, OneOf $ intersect as bs)
-resolve' (a, OneOf bs) = (a, a)
-resolve' (OneOf as, b) = (b, b)
--}
-
 lookupParam :: [Type] -> Type -> Type
-lookupParam pX (Param n) = pX !! n
+lookupParam pX (Param n) | n < length pX = pX !! n
+                         | otherwise = error "Can't happen."
 lookupParam pX (OneOf xs) = OneOf $ map (lookupParam pX) xs
 lookupParam _ x = x
 
@@ -245,14 +249,17 @@ dist :: Datum -> Datum -> Float
 dist a b = sqrt ((sqr $ (fst $ location a) - (fst $ location b))
                  + (sqr $ (snd $ location a) - (snd $ location b))
                 )
+           
+-- Recursively build the parse tree
 build :: [Datum] -> [Datum]
-build things | linked == Nothing = things
-             | otherwise = build $ fromJust linked
+build things | linked == [] = things
+             | otherwise = build linked
   where linked = link things
 
-link :: [Datum] -> Maybe [Datum]
-link things = fmap ((updateLinks things) . snd) $ maybeHead $ sortByFst $ 
-              concatMap (dists unlinked) $ filter (isFunction . is . applied_as) things
+-- Find a link
+link :: [Datum] -> [Datum]
+link things = fromMaybe [] $ fmap ((updateLinks things) . snd) $ maybeHead $ sortByFst $ 
+              concatMap (dists unlinked) $ filter wantsParam things
   where unlinked = filter (not . hasParent) things
 
 dists :: [Datum] -> Datum -> [(Float, (Datum, Datum))]
@@ -292,9 +299,4 @@ input :: Sig -> Sig
 input (Sig ps (F x _)) = Sig ps x
 input _ = error "No input to non-function"
 
-maybeHead [] = Nothing
-maybeHead (x:_) = Just x
-
-sortByFst :: Ord a => [(a, b)] -> [(a, b)]
-sortByFst = sortBy (\a b -> compare (fst a) (fst b))
 

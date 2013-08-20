@@ -110,9 +110,7 @@ moveWord ws (x,y) | w == Nothing = return ws
   where w = moving ws
 
 moveWord' :: [Word] -> (Float, Float) -> Word -> AppEnv [Word]
-moveWord' ws loc wd@(Word {status = MenuItem}) = 
-  do liftIO $ putStrLn $ show ws'
-     moveWord' ws' loc newWord
+moveWord' ws loc wd@(Word {status = MenuItem}) = moveWord' ws' loc newWord
   where newWord = wd {status = Tentative, ident = nextIdent ws}
         ws' = newWord:(clearMouseOffset ws)
 
@@ -124,8 +122,6 @@ moveWord' ws (x,y) wd =
                  | otherwise = max 0 $ min (xDivider - w) (x - xOffset)
               y' = max 0 $ min (1 - h) $ y - yOffset
           return $ setWord ws $ wd {location = (x',y')}
-
-
 
 inWord :: (Float, Float) -> Word -> Bool
 inWord (px,py) Word {size = (w,h), location = (x,y)} =
@@ -277,14 +273,16 @@ setSize wd font = do sz <- textSize (token wd) font
 wordMenu :: Font -> [String] -> IO ([Word])
 wordMenu font ws = mapM addWord (enumerate ws)
   where addWord (n, w) = 
-          newWord n w (0.9, (fromIntegral n) * 0.05) font MenuItem
+          newWord n w (xDivider + 0.01, (fromIntegral n) * 0.05) font MenuItem
+
+things = (map fst T.functions) ++ ["1", "2", "3", "2.5", "6.2"]
 
 main = withInit [InitEverything] $ 
        do result <- TTFG.init
           if not result
              then putStrLn "Failed to init ttf"
             else do env <- initEnv
-                    ws <- wordMenu (font env) ["+", "*", "1", "2", "3"]
+                    ws <- wordMenu (font env) things
                     let scene = parseScene ws
                     putStrLn $ show scene
                     runLoop env scene
