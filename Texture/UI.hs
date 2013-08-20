@@ -19,8 +19,8 @@ import qualified Texture.Types as T
 
 import Texture.Utils
 
-screenWidth  = 640
-screenHeight = 480
+screenWidth  = 1024
+screenHeight = 768
 screenBpp    = 32
 
 xDivider = 0.85
@@ -104,10 +104,13 @@ setMouseOffset ws (x,y) =
                         y' = y - (snd $ location i)
                     return $ setWord ws $ i {mousePos = Just (x',y')}
 
-moveWord :: [Word] -> (Float, Float) -> AppEnv [Word]
-moveWord ws (x,y) | w == Nothing = return ws
-                  | otherwise = moveWord' ws (x,y) (fromJust w)
-  where w = moving ws
+moveWord :: Scene -> (Float, Float) -> AppEnv Scene
+moveWord s (x,y) | w == Nothing = return s
+                 | otherwise = do ws <- moveWord' (source s) (x,y) (fromJust w)
+                                  let s = parseScene ws
+                                  liftIO $ putStrLn $ "parsed: " ++ (T.walkTrees $ parsed s)
+                                  return $ s
+  where w = moving $ source s
 
 moveWord' :: [Word] -> (Float, Float) -> Word -> AppEnv [Word]
 moveWord' ws loc wd@(Word {status = MenuItem}) = moveWord' ws' loc newWord
@@ -143,11 +146,10 @@ isInside (Rect rx ry rw rh) x y = (x' > rx) && (x' < rx + rw) && (y' > ry) && (y
  where (x', y') = (fromIntegral x, fromIntegral y)
 
 handleEvent :: Scene -> Event -> AppEnv (Scene)
-handleEvent scene (MouseMotion x y _ _) = 
-  do let ws = source scene
-     ws' <- moveWord ws (fromScreen (fromIntegral x, fromIntegral y))
-     return $ parseScene ws'
-  
+handleEvent s (MouseMotion x y _ _) = 
+  do s' <- moveWord s (fromScreen (fromIntegral x, fromIntegral y))
+     return $ parseScene $ source s'
+
 
 --return $ parseScene $ source $ withSource scene (\ws -> moveWord ws (fromScreen (fromIntegral x, fromIntegral y)))
 
@@ -155,7 +157,7 @@ handleEvent scene (MouseButtonDown x y ButtonLeft) =
   return $ withSource scene (\ws -> setMouseOffset ws (fromScreen (fromIntegral x, fromIntegral y)))
 	
 handleEvent scene (MouseButtonUp x y ButtonLeft) = 
-  return $ withSource scene clearMouseOffset
+  return $ parseScene $ source $ withSource scene clearMouseOffset
 
 handleEvent scene _ = return $ scene
 
@@ -273,7 +275,7 @@ setSize wd font = do sz <- textSize (token wd) font
 wordMenu :: Font -> [String] -> IO ([Word])
 wordMenu font ws = mapM addWord (enumerate ws)
   where addWord (n, w) = 
-          newWord n w (xDivider + 0.01, (fromIntegral n) * 0.05) font MenuItem
+          newWord n w (xDivider + 0.01, (fromIntegral n) * 0.04) font MenuItem
 
 things = (map fst T.functions) ++ ["1", "2", "3", "2.5", "6.2"]
 
@@ -284,5 +286,5 @@ main = withInit [InitEverything] $
             else do env <- initEnv
                     ws <- wordMenu (font env) things
                     let scene = parseScene ws
-                    putStrLn $ show scene
+                    --putStrLn $ show scene
                     runLoop env scene

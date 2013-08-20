@@ -21,6 +21,8 @@ data Type =
   | Pattern Type
   | WildCard
   | Param Int
+  | Osc
+  | OscStream
 
 instance Eq Type where
   F a a' == F b b' = and [a == b,
@@ -53,16 +55,27 @@ functions =
    ("-", numOp),
    ("/", numOp),
    ("*", numOp),
+   ("|+|", Sig [] $ F (Pattern Osc) (F (Pattern Osc) (Pattern Osc))),
    ("floor", Sig [] $ F Float Int),
    ("sinewave", floatPat),
    ("sinewave1", floatPat),
    ("fmap", mapper),
-   ("<$>", mapper)
+   ("<$>", mapper),
+   ("sound", stringToOsc),
+   ("vowel", stringToOsc),
+   ("shape", floatToOsc),
+   ("pan", floatToOsc),
+   ("silence", Sig [] $ Pattern WildCard),
+   ("dirt", Sig [] $ F (Pattern Osc) OscStream),
+   ("pure", Sig [WildCard] $ F (Param 0) (Pattern $ Param 0)),
+   ("bd", Sig [] $ String),
+   ("sn", Sig [] $ String)
    ]
-  
   where numOp = Sig [number] $ F (Param 0) $ F (Param 0) (Param 0)
         floatPat = Sig [] $ Pattern Float
         mapper = Sig [WildCard, WildCard] $ F (F (Param 0) (Param 1)) $ F (Pattern (Param 0)) (Pattern (Param 1))
+        stringToOsc = Sig [] $ F (Pattern String) (Pattern Osc)
+        floatToOsc = Sig [] $ F (Pattern Float) (Pattern Osc)
 
 data Datum = Datum {ident      :: Int,
                     token      :: String,
@@ -74,17 +87,6 @@ data Datum = Datum {ident      :: Int,
                     childIds :: [Int]
                    }
 
-{-
-data Datum = Datum {ident  :: Int,
-                    name   :: String,
-                    params :: [Type],
-                    is     :: Type,
-                    applied_as :: Type,
-                    location :: (Float, Float),
-                    parentId   :: Maybe Datum,
-                    childId   :: Maybe Datum
-                   }
--}
 instance Show Type where
   show (F a b) = "(" ++ show a ++ " -> " ++ show b ++ ")"
   show String = "s"
@@ -94,7 +96,18 @@ instance Show Type where
   show (Pattern t) = "p [" ++ (show t) ++ "]"
   show (OneOf ts) = "?" ++ (show ts)
   show (Param n) = "param#" ++ (show n)
+  show (Osc) = "osc"
+  show (OscStream) = "stream"
 
+walkTrees :: [Datum] -> String
+walkTrees ds = concatMap ((++ "\n") . (walkTree ds 0)) $ tops
+  where tops = filter ((== Nothing) . parentId) ds
+
+walkTree :: [Datum] -> Int -> Datum -> String
+walkTree ds level d = token d ++ ps -- ++ " :: " ++ (show $ applied_as d) ++ " parent " ++ (show $ parentId d)
+  where ps = concatMap (" " ++) $ map (parenthesise . recurse) (children d ds)
+        recurse = walkTree ds (level + 1)
+  
 number = OneOf [Float, Int]
 
 isFunction :: Type -> Bool
@@ -181,6 +194,8 @@ fits (Sig pA (Param a)) (Sig pB b) = fits (Sig pA (pA !! a)) (Sig pB b)
 fits (Sig _ Float) (Sig _ Float)   = True
 fits (Sig _ Int) (Sig _ Int)       = True
 fits (Sig _ String) (Sig _ String) = True
+fits (Sig _ OscStream) (Sig _ OscStream) = True
+fits (Sig _ Osc) (Sig _ Osc) = True
 
 fits _ _ = False
 
@@ -252,15 +267,16 @@ dist a b = sqrt ((sqr $ (fst $ location a) - (fst $ location b))
            
 -- Recursively build the parse tree
 build :: [Datum] -> [Datum]
-build things | linked == [] = things
-             | otherwise = build linked
+build things | linked == Nothing = things
+             | otherwise = build $ fromJust linked
   where linked = link things
 
 -- Find a link
-link :: [Datum] -> [Datum]
-link things = fromMaybe [] $ fmap ((updateLinks things) . snd) $ maybeHead $ sortByFst $ 
-              concatMap (dists unlinked) $ filter wantsParam things
+link :: [Datum] -> Maybe [Datum]
+link things = fmap ((updateLinks things) . snd) $ maybeHead $ sortByFst $ tmp 
   where unlinked = filter (not . hasParent) things
+        tmp = concatMap (dists unlinked) fs
+        fs = filter wantsParam things
 
 dists :: [Datum] -> Datum -> [(Float, (Datum, Datum))]
 dists things x = map (\fitter -> (dist x fitter, (x, fitter))) fitters

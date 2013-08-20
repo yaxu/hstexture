@@ -11,3 +11,8 @@ maybeHead (x:_) = Just x
 sortByFst :: Ord a => [(a, b)] -> [(a, b)]
 sortByFst = sortBy (\a b -> compare (fst a) (fst b))
 
+parenthesise :: String -> String
+parenthesise x = "(" ++ x ++ ")"
+                                          
+spaces :: Int -> String
+spaces n = take n $ repeat ' '
