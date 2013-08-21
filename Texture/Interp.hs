@@ -52,4 +52,4 @@ say :: String -> Interpreter ()
 say = liftIO . putStrLn
 
 printInterpreterError :: InterpreterError -> IO ()
-printInterpreterError e = putStrLn $ "Ups... " ++ (show e)
+printInterpreterError e = putStrLn $ "Oops. " ++ (show e)

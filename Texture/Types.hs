@@ -68,6 +68,14 @@ functions =
    ("shape", floatToOsc),
    ("pan", floatToOsc),
    ("silence", Sig [] $ Pattern WildCard),
+   ("density", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
+   ("slow", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
+   ("every", Sig [WildCard] $ F (Int) 
+             (F (F (Pattern $ Param 0) (Pattern $ Param 0)) 
+                (F (Pattern $ Param 0) (Pattern $ Param 0))
+             )
+   ),
+   ("rev", Sig [WildCard] $ F (Pattern $ Param 0) (Pattern $ Param 0)),
    --("dirt", Sig [] $ F (Pattern Osc) OscStream),
    --("pure", Sig [WildCard] $ F (Param 0) (Pattern $ Param 0)),
    ("]", Sig [OneOf [String,Int,Float]] (List (String))),
@@ -75,6 +83,11 @@ functions =
    ("bd", prependString),
    ("sn", prependString),
    ("hc", prependString),
+   ("a", prependString),
+   ("e", prependString),
+   ("i", prependString),
+   ("o", prependString),
+   ("u", prependString),
    ("gabba", prependString),
    ("~", prependString)
    ]
@@ -335,7 +348,7 @@ updateLinks ds (a, b) = appendChild ds' (a', b)
 
 appendChild :: [Datum] -> (Datum, Datum) -> [Datum]
 appendChild ds (a, b) = update a' $ update b' $ ds
-  where a' = a {childIds = (ident b):(childIds a)}
+  where a' = a {childIds = (childIds a) ++ [ident b]}
         b' = b {parentId = Just $ ident a}
 
 datumByIdent :: Int -> [Datum] -> Datum

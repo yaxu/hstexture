@@ -23,8 +23,8 @@ import Texture.Interp (start)
 import Stream (OscPattern)
 import Dirt
 
-screenWidth  = 1024
-screenHeight = 768
+screenWidth  = 800
+screenHeight = 600
 screenBpp    = 32
 
 xDivider = 0.85
@@ -114,7 +114,7 @@ moveWord s (x,y) | w == Nothing = return s
                                   let s = parseScene ws
                                       code = T.walkTreesWhere (T.isOscPattern . T.applied_as) (parsed s)
                                   if (null code) then 
-                                    liftIO $ putStrLn "empty"
+                                    return ()
                                     else
                                     do 
                                       let code' = "stack [" ++ (intercalate ", " code) ++ "]"
@@ -190,7 +190,7 @@ applySurface x y src dst clip = blitSurface src clip dst offset
 initEnv :: IO AppConfig
 initEnv = do    
     screen <- setVideoMode screenWidth screenHeight screenBpp [SWSurface]
-    font <- openFont "inconsolata.ttf" 28
+    font <- openFont "inconsolata.ttf" 16
     setCaption "Texture" []
     o <- dirtstart "texture"
     i <- start o
@@ -291,7 +291,7 @@ setSize wd font = do sz <- textSize (token wd) font
 wordMenu :: Font -> [String] -> IO ([Word])
 wordMenu font ws = mapM addWord (enumerate ws)
   where addWord (n, w) = 
-          newWord n w (xDivider + 0.01, (fromIntegral n) * 0.04) font MenuItem
+          newWord n w (xDivider + 0.01, (fromIntegral n) * 0.027) font MenuItem
 
 things = (map fst T.functions) ++ ["1", "2", "3", "2.5", "6.2"]
 
