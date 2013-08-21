@@ -3,7 +3,7 @@ module Texture.UI where
 import Control.Monad
 import Control.Monad.State
 import Control.Monad.Reader
-
+import Control.Concurrent.MVar
 import Data.Array.IArray
 
 import Graphics.UI.SDL
@@ -16,8 +16,12 @@ import Graphics.UI.SDL.TTF.Types
 import Data.Maybe (listToMaybe, fromMaybe, fromJust, isJust)
 import GHC.Int (Int16)
 import qualified Texture.Types as T
+import Data.List (intercalate)
 
 import Texture.Utils
+import Texture.Interp (start)
+import Stream (OscPattern)
+import Dirt
 
 screenWidth  = 1024
 screenHeight = 768
@@ -108,7 +112,15 @@ moveWord :: Scene -> (Float, Float) -> AppEnv Scene
 moveWord s (x,y) | w == Nothing = return s
                  | otherwise = do ws <- moveWord' (source s) (x,y) (fromJust w)
                                   let s = parseScene ws
-                                  liftIO $ putStrLn $ "parsed: " ++ (T.walkTrees $ parsed s)
+                                      code = T.walkTreesWhere (T.isOscPattern . T.applied_as) (parsed s)
+                                  if (null code) then 
+                                    liftIO $ putStrLn "empty"
+                                    else
+                                    do 
+                                      let code' = "stack [" ++ (intercalate ", " code) ++ "]"
+                                      i <- input `liftM` ask
+                                      liftIO $ putStrLn $ "sending '" ++ code' ++ "'"
+                                      liftIO $ putMVar i code'
                                   return $ s
   where w = moving $ source s
 
@@ -163,7 +175,9 @@ handleEvent scene _ = return $ scene
 
 data AppConfig = AppConfig {
   screen       :: Surface,
-  font         :: Font
+  font         :: Font,
+  input        :: MVar String,
+  output       :: MVar OscPattern
 }
 
 type AppState = StateT Scene IO
@@ -178,7 +192,9 @@ initEnv = do
     screen <- setVideoMode screenWidth screenHeight screenBpp [SWSurface]
     font <- openFont "inconsolata.ttf" 28
     setCaption "Texture" []
-    return $ AppConfig screen font
+    o <- dirtstart "texture"
+    i <- start o
+    return $ AppConfig screen font i o
 
 drawScene :: Scene -> Font -> Surface -> IO ()
 drawScene scene font screen = 
@@ -279,12 +295,12 @@ wordMenu font ws = mapM addWord (enumerate ws)
 
 things = (map fst T.functions) ++ ["1", "2", "3", "2.5", "6.2"]
 
-main = withInit [InitEverything] $ 
-       do result <- TTFG.init
-          if not result
-             then putStrLn "Failed to init ttf"
-            else do env <- initEnv
-                    ws <- wordMenu (font env) things
-                    let scene = parseScene ws
-                    --putStrLn $ show scene
-                    runLoop env scene
+run = withInit [InitEverything] $ 
+      do result <- TTFG.init
+         if not result
+           then putStrLn "Failed to init ttf"
+           else do env <- initEnv
+                   ws <- wordMenu (font env) things
+                   let scene = parseScene ws
+                   --putStrLn $ show scene
+                   runLoop env scene

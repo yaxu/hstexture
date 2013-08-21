@@ -23,6 +23,7 @@ data Type =
   | Param Int
   | Osc
   | OscStream
+  | List Type
 
 instance Eq Type where
   F a a' == F b b' = and [a == b,
@@ -35,6 +36,7 @@ instance Eq Type where
   Pattern a == Pattern b = a == b
   WildCard == WildCard = True
   Param a == Param b = a == b
+  List a == List b = a == b
   _ == _ = False
 
 -- Type signature
@@ -66,17 +68,28 @@ functions =
    ("shape", floatToOsc),
    ("pan", floatToOsc),
    ("silence", Sig [] $ Pattern WildCard),
-   ("dirt", Sig [] $ F (Pattern Osc) OscStream),
-   ("pure", Sig [WildCard] $ F (Param 0) (Pattern $ Param 0)),
-   ("bd", Sig [] $ String),
-   ("sn", Sig [] $ String)
+   --("dirt", Sig [] $ F (Pattern Osc) OscStream),
+   --("pure", Sig [WildCard] $ F (Param 0) (Pattern $ Param 0)),
+   ("]", Sig [OneOf [String,Int,Float]] (List (String))),
+   ("[", Sig [OneOf [String,Int,Float]] (F (List (String)) (Pattern (String)))),
+   ("bd", prependString),
+   ("sn", prependString),
+   ("hc", prependString),
+   ("gabba", prependString),
+   ("~", prependString)
    ]
   where numOp = Sig [number] $ F (Param 0) $ F (Param 0) (Param 0)
         floatPat = Sig [] $ Pattern Float
         mapper = Sig [WildCard, WildCard] $ F (F (Param 0) (Param 1)) $ F (Pattern (Param 0)) (Pattern (Param 1))
         stringToOsc = Sig [] $ F (Pattern String) (Pattern Osc)
         floatToOsc = Sig [] $ F (Pattern Float) (Pattern Osc)
-
+        prepender a = Sig [] $ F (List a) (List a)
+        prependString = prepender String
+{-
+[ :: List a -> Pattern a
+] :: a -> List a
+bd :: List a -> List a
+-}
 data Datum = Datum {ident      :: Int,
                     token      :: String,
                     sig        :: Sig,
@@ -99,13 +112,19 @@ instance Show Type where
   show (Osc) = "osc"
   show (OscStream) = "stream"
 
-walkTrees :: [Datum] -> String
-walkTrees ds = concatMap ((++ "\n") . (walkTree ds 0)) $ tops
-  where tops = filter ((== Nothing) . parentId) ds
+walkTreesWhere :: (Datum -> Bool) -> [Datum] -> [String]
+walkTreesWhere f ds = map (walkTree ds 0) $ tops
+  where tops = filter f $ filter ((== Nothing) . parentId) ds
 
 walkTree :: [Datum] -> Int -> Datum -> String
-walkTree ds level d = token d ++ ps -- ++ " :: " ++ (show $ applied_as d) ++ " parent " ++ (show $ parentId d)
-  where ps = concatMap (" " ++) $ map (parenthesise . recurse) (children d ds)
+
+walkTree ds level d@(Datum {token = "["}) = 
+  "(p \"" ++ contents ++ "\")"
+  where contents = intercalate " " $ map token (offspring ds d)
+walkTree ds level d@(Datum {token = "]"}) = ""
+
+walkTree ds level d = value d ++ ps -- ++ " :: " ++ (show $ applied_as d) ++ " parent " ++ (show $ parentId d)
+  where ps = concatMap (" " ++) $ map (parenthesise . recurse) (children ds d)
         recurse = walkTree ds (level + 1)
   
 number = OneOf [Float, Int]
@@ -121,9 +140,13 @@ parent :: Datum -> [Datum] -> Maybe Datum
 parent d ds = do i <- parentId d
                  return $ datumByIdent i ds
 
-children :: Datum -> [Datum] -> [Datum]
-children d ds = map (\childId -> datumByIdent childId ds) (childIds d)
+children :: [Datum] -> Datum -> [Datum]
+children ds d = map (\childId -> datumByIdent childId ds) (childIds d)
 
+offspring :: [Datum] -> Datum -> [Datum]
+offspring ds d = cs ++ concatMap (offspring ds) cs
+  where cs = children ds d
+                                  
 hasParent :: Datum -> Bool
 hasParent = isJust . parentId
 
@@ -146,6 +169,15 @@ instance Show Datum where
 
 instance Eq Datum where
   a == b = (ident a) == (ident b)
+
+isOscPattern :: Sig -> Bool
+isOscPattern t = fits t (Sig [] $ Pattern Osc)
+
+value :: Datum -> String
+value x@(Datum {sig = (Sig {is = String})}) = "\"" ++ token x ++ "\""
+-- Wrap in parenthesis so that infix operators work
+value x@(Datum {sig = (Sig {is = F _ _})}) = "(" ++ token x ++ ")"
+value x = token x
 
 update :: Datum -> [Datum] -> [Datum]
 update thing things = map f things
@@ -187,6 +219,8 @@ fits (Sig pA a) (Sig pB (OneOf bs)) =
   or $ map (\x -> fits (Sig pA a) (Sig pB x)) bs
 
 fits (Sig pA (Pattern a)) (Sig pB (Pattern b)) = fits (Sig pA a) (Sig pB b)
+
+fits (Sig pA (List a)) (Sig pB (List b)) = fits (Sig pA a) (Sig pB b)
 
 fits (Sig pA a) (Sig pB (Param b)) = fits (Sig pA a) (Sig pB (pB !! b))
 fits (Sig pA (Param a)) (Sig pB b) = fits (Sig pA (pA !! a)) (Sig pB b)

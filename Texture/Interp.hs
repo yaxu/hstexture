@@ -16,15 +16,16 @@ deriving instance Typeable Param
 deriving instance Typeable1 Pattern
 deriving instance Typeable Sound.OpenSoundControl.Type.Datum
 
-start :: IO (MVar String, MVar OscPattern)
-start = do input <- newMVar "sound $ p \"bd\""
-           output <- newEmptyMVar
-           forkIO $ do r <- runInterpreter $ runI input output
-                       case r of
-                         Left err -> printInterpreterError err
-                         Right () -> putStrLn "good."
-                       return ()
-           return (input, output)
+start :: MVar OscPattern -> IO (MVar String)
+start output = do input <- newMVar "silence"
+                  forkIO $ loop input output
+                  return input
+  where loop input output = 
+          do r <- runInterpreter $ runI input output
+             case r of
+               Left err -> printInterpreterError err
+               Right () -> putStrLn "Eh?"
+             loop input output
 
 runI :: MVar String -> MVar OscPattern -> Interpreter ()
 runI input output =
@@ -34,13 +35,18 @@ runI input output =
       setImportsQ [("Prelude", Nothing), 
                    ("Stream", Nothing), ("Dirt", Nothing), ("Pattern", Nothing),
                    ("Data.Map", Nothing), ("Sound.OpenSoundControl", Nothing),
-                   ("Parse", Nothing)
+                   ("Parse", Nothing),
+                   ("Control.Applicative", Nothing)
                   ]
-      expr <- liftIO (takeMVar input)
-      say =<< Language.Haskell.Interpreter.typeOf expr
-      
-      p <- interpret expr (as :: OscPattern)
-      say (show p)
+      loop
+  where loop = do 
+          expr <- liftIO (takeMVar input)
+          say =<< Language.Haskell.Interpreter.typeOf expr
+
+          p <- interpret expr (as :: OscPattern)
+          say (show p)
+          liftIO $ swapMVar output p
+          loop
 
 say :: String -> Interpreter ()
 say = liftIO . putStrLn
