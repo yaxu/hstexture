@@ -69,13 +69,15 @@ functions =
    ("pan", floatToOsc),
    ("silence", Sig [] $ Pattern WildCard),
    ("density", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
-   ("slow", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
+   --("slow", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
+   ("slow", Sig [String] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("every", Sig [WildCard] $ F (Int) 
              (F (F (Pattern $ Param 0) (Pattern $ Param 0)) 
                 (F (Pattern $ Param 0) (Pattern $ Param 0))
              )
    ),
-   ("rev", Sig [WildCard] $ F (Pattern $ Param 0) (Pattern $ Param 0)),
+   --("rev", Sig [WildCard] $ F (Pattern $ Param 0) (Pattern $ Param 0)),
+   ("rev", Sig [String] $ F (Pattern $ Param 0) (Pattern $ Param 0)),
    --("dirt", Sig [] $ F (Pattern Osc) OscStream),
    --("pure", Sig [WildCard] $ F (Param 0) (Pattern $ Param 0)),
    ("]", Sig [OneOf [String,Int,Float]] (List (String))),
@@ -118,33 +120,53 @@ instance Show Type where
   show String = "s"
   show Float = "f"
   show Int = "i"
-  show WildCard = "*"
-  show (Pattern t) = "p [" ++ (show t) ++ "]"
   show (OneOf ts) = "?" ++ (show ts)
+  show (Pattern t) = "p [" ++ (show t) ++ "]"
+  show WildCard = "*"
   show (Param n) = "param#" ++ (show n)
   show (Osc) = "osc"
   show (OscStream) = "stream"
+  show (List t) = "list [" ++ (show t) ++ "]"
 
 walkTreesWhere :: (Datum -> Bool) -> [Datum] -> [String]
-walkTreesWhere f ds = map (walkTree ds 0) $ tops
+walkTreesWhere f ds = map (walkTree ds) $ tops
   where tops = filter f $ filter ((== Nothing) . parentId) ds
 
-walkTree :: [Datum] -> Int -> Datum -> String
+walkTree :: [Datum] -> Datum -> String
 
-walkTree ds level d@(Datum {token = "["}) = 
+walkTree ds d@(Datum {token = "["}) = 
   "(p \"" ++ contents ++ "\")"
   where contents = intercalate " " $ map token (offspring ds d)
-walkTree ds level d@(Datum {token = "]"}) = ""
+walkTree ds d@(Datum {token = "]"}) = ""
 
-walkTree ds level d = value d ++ ps -- ++ " :: " ++ (show $ applied_as d) ++ " parent " ++ (show $ parentId d)
+walkTree ds d = value d ++ ps -- ++ " :: " ++ (show $ applied_as d) ++ " parent " ++ (show $ parentId d)
   where ps = concatMap (" " ++) $ map (parenthesise . recurse) (children ds d)
-        recurse = walkTree ds (level + 1)
+        recurse = walkTree ds
   
 number = OneOf [Float, Int]
 
 isFunction :: Type -> Bool
 isFunction (F _ _) = True
 isFunction _ = False
+
+isPattern :: Type -> Bool
+isPattern (Pattern _) = True
+isPattern _ = False
+
+patternType :: Type -> Maybe Type
+patternType (Pattern t) = Just t
+patternType _ = Nothing
+
+appliedType :: Datum -> Type
+appliedType = is . applied_as
+
+appliedConcreteType :: Datum -> Type
+appliedConcreteType = concreteType . applied_as
+
+concreteType :: Sig -> Type
+concreteType (Sig ps (Pattern x)) = Pattern (concreteType (Sig ps x))
+concreteType (Sig ps (Param n)) = concreteType (Sig ps (ps !! n))
+concreteType (Sig _ x) = x
 
 wantsParam :: Datum -> Bool
 wantsParam d = (parentId d) == Nothing && (isFunction $ is $ applied_as $ d)
