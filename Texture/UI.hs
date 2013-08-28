@@ -13,10 +13,10 @@ import qualified Graphics.UI.SDL.TTF.General as TTFG
 import Graphics.UI.SDL.TTF.Management
 import Graphics.UI.SDL.TTF.Render
 import Graphics.UI.SDL.TTF.Types
-import Data.Maybe (listToMaybe, fromMaybe, fromJust, isJust)
+import Data.Maybe (listToMaybe, fromMaybe, fromJust, isJust, catMaybes)
 import GHC.Int (Int16)
 import qualified Texture.Types as T
-import Data.List (intercalate)
+import Data.List (intercalate, tails)
 import Data.Colour
 import Data.Colour.Names
 import Data.Colour.SRGB
@@ -24,6 +24,7 @@ import qualified GHC.Word
 import Data.Bits
 import Data.Ratio
 import Tempo
+import Debug.Trace (trace)
 
 import Texture.Utils
 import Texture.Interp (start, interpretPat, Job (OscJob, ColourJob))
@@ -35,7 +36,7 @@ screenWidth  = 800
 screenHeight = 600
 screenBpp    = 32
 
-xDivider = 0.85
+xDivider = 0.75
 
 data WordStatus = Active
                 | Tentative
@@ -57,6 +58,9 @@ instance Eq Word where
 data Scene = Scene {source :: [Word],
                     parsed :: [T.Datum]
                    }
+
+bottomLeft :: Word -> (Float, Float)
+bottomLeft (Word {location = (x,y), size = (w,h)}) = (x+w, y+h)
 
 parseScene :: [Word] -> Scene
 parseScene ws = Scene ws (T.build $ map wordToDatum (filterActive ws))
@@ -182,20 +186,29 @@ handleEvent scene (MouseButtonUp x y ButtonLeft) =
                return s'
 handleEvent scene _ = return $ scene
 
+resetPats :: [Word] -> [Word]
+resetPats = map (\w -> w {pat = silence})
+
 interpretPats :: Scene -> AppEnv Scene
 interpretPats s = do ps <- pats
-                     let ws = foldr (Prelude.flip updateWord) (source s) ps
+                     metaPs <- metaPats
+                     let ws = foldr (Prelude.flip updateWord) (resetPats $ source s) (ps ++ metaPs)
                      return $ s {source = ws}
-  where f x = T.hasParent x && T.isPattern (T.appliedConcreteType x)
-        datums = (filter f $ parsed s) :: [T.Datum]
-        pats = mapM (\d -> do let job = ColourJob (fromJust $ T.patternType $ T.appliedConcreteType d) (T.walkTree (parsed s) d)
-                              i <- input `liftM` ask
-                              o <- colourOutput `liftM` ask
-                              liftIO $ putMVar i job
-                              p <- liftIO $ takeMVar o
-                              let w = wordByIdent (T.ident d) (source s)
-                              return $ w {pat = p}
-                    ) datums
+  where isPatterned x = T.hasParent x && T.isPattern (T.appliedConcreteType x)
+        patterned = (filter isPatterned $ parsed s) :: [T.Datum]
+        simpleJob d = runJob (d, (fromJust' $ T.patternType $ T.appliedConcreteType d), T.walkTree (parsed s) d)
+        runJob (d, t, code) = 
+          do let job = ColourJob t code
+             i <- input `liftM` ask
+             o <- colourOutput `liftM` ask
+             liftIO $ putMVar i job
+             p <- liftIO $ takeMVar o
+             let w = wordByIdent (T.ident d) (source s)
+             return $ w {pat = p}
+        pats = mapM simpleJob patterned
+        metas :: [(T.Datum, T.Type, String)]
+        metas = catMaybes $ map (T.guessTransform (parsed s)) (parsed s)
+        metaPats = mapM runJob metas
 
 data AppConfig = AppConfig {
   screen       :: Surface,
@@ -224,6 +237,39 @@ initEnv = do
     tempoMV <- tempoMVar
     return $ AppConfig screen font i oscO colourO tempoMV
 
+
+drawScene' :: Scene -> Font -> Surface -> Double -> IO ()
+drawScene' scene font screen beat = 
+  do mapM_ (\i -> 
+             do let (x, y) = toScreen $ location i
+                    (w, h) = toScreen $ size i
+                fillRect screen (Just $ Rect x y w h) (Pixel 0x00333333)
+                message <- renderTextSolid font (token i) textColor
+                applySurface 
+                  (floor $ (fromIntegral screenWidth) * (fst $ location i)) 
+                  (floor $ (fromIntegral screenHeight) * (snd $ location i)) 
+                  message screen Nothing
+           ) (source scene)
+     mapM_ (drawTree scene font screen beat) top
+  where top = filter (T.hasChild) $ parsed scene
+        textColor = Color 255 255 255
+
+drawTree :: Scene -> Font -> Surface -> Double -> T.Datum -> IO ()
+drawTree scene font screen beat d = 
+  do mapM_ drawLink links
+  where links = tails $ d:(T.children (parsed scene) d)
+        drawLink [] = return ()
+        drawLink (_:[]) = return ()
+        drawLink ds@(a:b:_) = do mapM_ (drawLinkLine a b) (enumerate $ reverse $ tail ds)
+        drawLinkLine a b (n, x) = 
+          do (thickLine n 0.003 x2 y2 x1 y1) screen lineColor
+             drawPat n x1 y1 x2 y2 p screen beat
+          where (x1, y1) = T.location a
+                (x2, y2) = T.location b
+                p = pat $ wordByIdent (T.ident x) (source scene)
+        lineColor = rgbColor 255 255 255
+
+
 drawScene :: Scene -> Font -> Surface -> Double -> IO ()
 drawScene scene font screen beat = 
   do mapM_ (\i -> 
@@ -238,46 +284,50 @@ drawScene scene font screen beat =
            ) (source scene)
      mapM_ (\d -> 
              do let (x1, y1) = T.location d
-                mapM_ (\childId -> do 
+                mapM_ (\(n, childId) -> do 
                           let p = pat $ wordByIdent childId (source scene)
                               (x2, y2) = T.location (T.datumByIdent childId (parsed scene))
-                          (thickLine 0.003 x2 y2 x1 y1) screen lineColor
-                          drawPat x1 y1 x2 y2 p screen beat
-                      ) (T.childIds d)
+                          (thickLine n 0.003 x2 y2 x1 y1) screen lineColor
+                          drawPat n x1 y1 x2 y2 p screen beat
+                      ) (enumerate $ T.childIds d)
            )
        (filter T.hasChild $ parsed scene)
   where textColor = Color 255 255 255
         lineColor = rgbColor 255 255 255
 
-drawPat :: Float -> Float -> Float -> Float -> Pattern (Colour Double) -> Surface -> Double -> IO ()
-drawPat x1 y1 x2 y2 p screen beat = do 
-                                  mapM_ drawEvent es
+drawPat :: Int -> Float -> Float -> Float -> Float -> Pattern (Colour Double) -> Surface -> Double -> IO ()
+drawPat n x1 y1 x2 y2 p screen beat = mapM_ drawEvent es
   where es = map (\((s,e), ev) -> ((max s pos, min e (pos + 1)), ev)) $ arc p (pos, pos + 1)
         pos = toRational $ beat
         xd = x2 - x1
         yd = y2 - y1
-        drawEvent ((s,e), c) = (thickLine 0.004 (x1 + (xd * fromRational (e-pos))) (y1 + (yd * fromRational (e-pos))) (x1 + (xd * fromRational (s - pos))) (y1 + (yd * fromRational (s-pos)))) screen (colourToPixel c)
+        drawEvent ((s,e), c) = (thickLine n 0.004 (x1 + (xd * fromRational (e-pos))) (y1 + (yd * fromRational (e-pos))) (x1 + (xd * fromRational (s - pos))) (y1 + (yd * fromRational (s-pos)))) screen (colourToPixel c)
 
-thickLine :: Float -> Float -> Float -> Float -> Float -> (Surface -> Pixel -> IO Bool)
-thickLine thickness x1 y1 x2 y2 = \s p -> do SDLP.filledPolygon s (map toScreen16 coords) p
-                                             SDLP.aaPolygon s (map toScreen16 coords) p
-                                             SDLP.filledPolygon s (map toScreen16 arrowCoords) p
-                                             SDLP.aaPolygon s (map toScreen16 arrowCoords) p
+thickLine :: Int -> Float -> Float -> Float -> Float -> Float -> (Surface -> Pixel -> IO Bool)
+thickLine n thickness x1 y1 x2 y2 = 
+  \s p -> do SDLP.filledPolygon s (map toScreen16 coords) p
+             SDLP.aaPolygon s (map toScreen16 coords) p
+             SDLP.filledPolygon s (map toScreen16 arrowCoords) p
+             SDLP.aaPolygon s (map toScreen16 arrowCoords) p
   where x = x2 - x1
         y = y2 - y1
         headx = (x/l) / 80
         heady = (y/l) / 80
         l = sqrt $ x*x+y*y
+        incX = (fromIntegral n) * (thickness * (y2-y1) / l) * 2
+        incY = (fromIntegral n) * (thickness * (x1-x2) / l) * 2
         ox = (thickness * (y2-y1) / l)/2
         oy = (thickness * (x1-x2) / l)/2
-        coords = [(x1 + ox, y1 + oy),
-                  ((x2 + ox) - headx, (y2 + oy) - heady),
-                  ((x2 - ox) - headx, (y2 - oy) - heady),
-                  (x1 - ox, y1 - oy)
+        coords = [(x1 + ox + incX, y1 + oy + incY),
+                  ((x2 + ox + incX) - headx, (y2 + oy + incY) - heady),
+                  (((x2 - ox) + incX) - headx, ((y2 - oy) + incY) - heady),
+                  (x1 + incX - ox, y1 + incY - oy)
                  ]
-        arrowCoords = [((x2 + ox*2.5) - headx, (y2 + oy*2.5) - heady),
-                       ((x2 - ox*2.5) - headx, (y2 - oy*2.5) - heady),
-                       (x2, y2)
+        arrowCoords = [(((x2 + ox*2.5) + incX) - headx, 
+                        ((y2 + oy*2.5) + incY) - heady),
+                       (((x2 - ox*2.5) + incX) - headx,
+                        ((y2 - oy*2.5) + incY) - heady),
+                       (x2+incX, y2+incY)
                       ]
 
 
@@ -296,7 +346,7 @@ loop = do
         clipRect <- Just `liftM` getClipRect screen
         fillRect screen clipRect bgColor
         SDLP.aaLine screen (floor $ xDivider * (fromIntegral screenWidth)) 0 (floor $ xDivider * (fromIntegral screenWidth)) (fromIntegral screenHeight) (Pixel 0x00ffffff)
-        drawScene scene font screen beat
+        drawScene' scene font screen beat
         Graphics.UI.SDL.flip screen
     unless quit loop
       where act e = do scene <- get 
@@ -332,9 +382,9 @@ setSize wd font = do sz <- textSize (token wd) font
 wordMenu :: Font -> [String] -> IO ([Word])
 wordMenu font ws = mapM addWord (enumerate ws)
   where addWord (n, w) = 
-          newWord n w (xDivider + 0.01, (fromIntegral n) * 0.027) font MenuItem
+          newWord n w (xDivider + 0.005 + ((fromIntegral $ n `mod` 2) * (1 - xDivider) / 2), (fromIntegral (n `div` 2)) * 0.027) font MenuItem
 
-things = (map fst T.functions) ++ ["1", "2", "3", "2.5", "6.2"]
+things = (map fst T.functions)
 
 run = withInit [InitEverything] $ 
       do result <- TTFG.init

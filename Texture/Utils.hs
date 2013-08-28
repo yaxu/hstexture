@@ -16,3 +16,10 @@ parenthesise x = "(" ++ x ++ ")"
                                           
 spaces :: Int -> String
 spaces n = take n $ repeat ' '
+
+single :: [a] -> Maybe a
+single (x:[]) = Just x
+single _ = Nothing
+
+fromJust' (Just x) = x
+fromJust' Nothing = error "nothing is just"

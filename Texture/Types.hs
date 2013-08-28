@@ -17,12 +17,12 @@ data Type =
   | String
   | Float
   | Int
+  | Osc
+  | OscStream
   | OneOf [Type]
   | Pattern Type
   | WildCard
   | Param Int
-  | Osc
-  | OscStream
   | List Type
 
 instance Eq Type where
@@ -32,6 +32,8 @@ instance Eq Type where
   String == String = True
   Float == Float = True
   Int == Int = True
+  Osc == Osc = True
+  OscStream == OscStream = True
   OneOf as == OneOf bs = as == bs
   Pattern a == Pattern b = a == b
   WildCard == WildCard = True
@@ -55,7 +57,7 @@ functions :: [(String, Sig)]
 functions = 
   [("+", numOp),
    ("-", numOp),
-   ("/", numOp),
+   ("/", floatOp),
    ("*", numOp),
    ("|+|", Sig [] $ F (Pattern Osc) (F (Pattern Osc) (Pattern Osc))),
    ("floor", Sig [] $ F Float Int),
@@ -63,37 +65,46 @@ functions =
    ("sinewave1", floatPat),
    ("fmap", mapper),
    ("<$>", mapper),
+   ("<*>", Sig [WildCard, WildCard] $ F (Pattern $ F (Param 0) (Param 1)) (F (Pattern (Param 0)) (Pattern (Param 1)))),
    ("sound", stringToOsc),
    ("vowel", stringToOsc),
    ("shape", floatToOsc),
    ("pan", floatToOsc),
    ("silence", Sig [] $ Pattern WildCard),
    ("density", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
-   --("slow", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
-   ("slow", Sig [String] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
+   ("slow", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("every", Sig [WildCard] $ F (Int) 
              (F (F (Pattern $ Param 0) (Pattern $ Param 0)) 
                 (F (Pattern $ Param 0) (Pattern $ Param 0))
              )
    ),
-   --("rev", Sig [WildCard] $ F (Pattern $ Param 0) (Pattern $ Param 0)),
-   ("rev", Sig [String] $ F (Pattern $ Param 0) (Pattern $ Param 0)),
-   --("dirt", Sig [] $ F (Pattern Osc) OscStream),
-   --("pure", Sig [WildCard] $ F (Param 0) (Pattern $ Param 0)),
-   ("]", Sig [OneOf [String,Int,Float]] (List (String))),
-   ("[", Sig [OneOf [String,Int,Float]] (F (List (String)) (Pattern (String)))),
+   ("rev", Sig [WildCard] $ F (Pattern $ Param 0) (Pattern $ Param 0)),
+   ("pick", Sig [] $ F String (F Int String)),
+   ("[", Sig [OneOf [String,Int,Float]] (F (List (Param 0)) (Pattern (Param 0)))),
+   ("]", Sig [OneOf [String,Int,Float]] (List (Param 0))),
    ("bd", prependString),
    ("sn", prependString),
    ("hc", prependString),
+   ("cp", prependString),
    ("a", prependString),
    ("e", prependString),
    ("i", prependString),
    ("o", prependString),
    ("u", prependString),
    ("gabba", prependString),
-   ("~", prependString)
+   ("~", prependString),
+   ("0", Sig [] number),
+   ("0.5", Sig [] number),
+   ("1", Sig [] number),
+   ("2", Sig [] number),
+   ("3", Sig [] number),
+   ("4", Sig [] number),
+   ("5", Sig [] number),
+   ("6", Sig [] number),
+   ("7", Sig [] number)
    ]
   where numOp = Sig [number] $ F (Param 0) $ F (Param 0) (Param 0)
+        floatOp = Sig [] $ F Float (F Float Float)
         floatPat = Sig [] $ Pattern Float
         mapper = Sig [WildCard, WildCard] $ F (F (Param 0) (Param 1)) $ F (Pattern (Param 0)) (Pattern (Param 1))
         stringToOsc = Sig [] $ F (Pattern String) (Pattern Osc)
@@ -153,6 +164,22 @@ isPattern :: Type -> Bool
 isPattern (Pattern _) = True
 isPattern _ = False
 
+isPatTransform :: Type -> Bool
+isPatTransform (F a b) = (isPattern a) && (isPattern b)
+isPatTransform _ = False
+
+-- Look for a function from pattern to pattern, and try to find and
+-- return a compatible pattern applied to its parent
+
+guessTransform :: [Datum] -> Datum -> Maybe (Datum, Type, String)
+guessTransform ds a | isMetaP = do p <- (parent a ds) 
+                                   sibling <- (single $ fitters p)
+                                   return $ (a, (fromJust' $ patternType $ appliedConcreteType sibling), (walkTree ds a) ++ " $ " ++ (walkTree ds sibling))
+                    | otherwise = Nothing
+  where isMetaP = hasParent a && isPatTransform (appliedConcreteType a)
+        fitters p = filter (\b -> fits (applied_as b) aInput) (children ds p)
+        aInput = input $ applied_as a
+
 patternType :: Type -> Maybe Type
 patternType (Pattern t) = Just t
 patternType _ = Nothing
@@ -186,7 +213,7 @@ hasParent :: Datum -> Bool
 hasParent = isJust . parentId
 
 hasChild :: Datum -> Bool
-hasChild d = not $ childIds d == []
+hasChild = not . null . childIds
 
 instance Show Datum where
   show t = intercalate "\n" $ map (\(s, f) -> s ++ ": " ++ (f t))
@@ -232,8 +259,7 @@ stringToType s = scanType Int s
                              | otherwise = String
 
 stringToSig :: String -> Sig
-stringToSig s | t == String = fromMaybe (Sig [] String) $ lookup s functions
-              | otherwise = Sig [] t
+stringToSig s = fromMaybe (Sig [] t) $ lookup s functions
   where t = stringToType s
 
 
@@ -305,6 +331,12 @@ resolve (Sig pA a) (Sig pB (OneOf bs)) = Sig pA (simplify t)
 
 resolve a (Sig _ WildCard) = a
 resolve (Sig _ WildCard) b = b
+
+resolve (Sig pA (Pattern a)) (Sig pB (Pattern b)) = Sig pA' (Pattern a')
+  where (Sig pA' a') =  resolve (Sig pA a) (Sig pB b)
+
+resolve (Sig pA (List a)) (Sig pB (List b)) = Sig pA' (List a')
+  where (Sig pA' a') =  resolve (Sig pA a) (Sig pB b)
 
 resolve a b = a
 
