@@ -70,6 +70,9 @@ functions =
    ("vowel", stringToOsc),
    ("shape", floatToOsc),
    ("pan", floatToOsc),
+   ("overlay", Sig [WildCard] $ F (Pattern $ Param 0) (F (Pattern $ Param 0) (Pattern $ Param 0))),
+   ("append", Sig [WildCard] $ F (Pattern $ Param 0) (F (Pattern $ Param 0) (Pattern $ Param 0))),
+   ("append'", Sig [WildCard] $ F (Pattern $ Param 0) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("silence", Sig [] $ Pattern WildCard),
    ("density", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("slow", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
@@ -109,8 +112,9 @@ functions =
         mapper = Sig [WildCard, WildCard] $ F (F (Param 0) (Param 1)) $ F (Pattern (Param 0)) (Pattern (Param 1))
         stringToOsc = Sig [] $ F (Pattern String) (Pattern Osc)
         floatToOsc = Sig [] $ F (Pattern Float) (Pattern Osc)
-        prepender a = Sig [] $ F (List a) (List a)
-        prependString = prepender String
+
+prepender a = Sig [] $ F (List a) (List a)
+prependString = prepender String
 {-
 [ :: List a -> Pattern a
 ] :: a -> List a
@@ -121,6 +125,7 @@ data Datum = Datum {ident      :: Int,
                     sig        :: Sig,
                     applied_as :: Sig,
                     location   :: (Float, Float),
+                    applied_location :: (Float, Float),
                     parentId   :: Maybe Int,
                     --childId      :: Maybe Int,
                     childIds :: [Int]
@@ -259,8 +264,9 @@ stringToType s = scanType Int s
                              | otherwise = String
 
 stringToSig :: String -> Sig
-stringToSig s = fromMaybe (Sig [] t) $ lookup s functions
-  where t = stringToType s
+stringToSig s = fromMaybe def $ lookup s functions
+  where def | stringToType s == String = prependString
+            | otherwise = Sig [] (stringToType s)
 
 
 
@@ -394,9 +400,11 @@ dists things x = map (\fitter -> (dist x fitter, (x, fitter))) fitters
 -- Apply b to a, and resolve the wildcards and "oneof"s
 
 updateLinks :: [Datum] -> (Datum, Datum) -> [Datum]
-updateLinks ds (a, b) = appendChild ds' (a', b)
+updateLinks ds (a, b) = appendChild ds' (a', b')
   where s = resolve (input $ applied_as a) (applied_as $ b)
-        a' = a {applied_as = (output (applied_as a)) {params = params s}}
+        a' = a {applied_as = (output (applied_as a)) {params = params s}
+               }
+        b' = b {applied_location = applied_location a}
         ds' = update a' ds
 
 
