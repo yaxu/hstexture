@@ -60,6 +60,7 @@ functions =
    ("/", floatOp),
    ("*", numOp),
    ("|+|", Sig [] $ F (Pattern Osc) (F (Pattern Osc) (Pattern Osc))),
+   ("striate", Sig [] $ F Int (F (Pattern Osc) (Pattern Osc))),
    ("floor", Sig [] $ F Float Int),
    ("sinewave", floatPat),
    ("sinewave1", floatPat),
@@ -69,6 +70,7 @@ functions =
    ("sound", stringToOsc),
    ("vowel", stringToOsc),
    ("shape", floatToOsc),
+   ("speed", floatToOsc),
    ("pan", floatToOsc),
    ("overlay", Sig [WildCard] $ F (Pattern $ Param 0) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("append", Sig [WildCard] $ F (Pattern $ Param 0) (F (Pattern $ Param 0) (Pattern $ Param 0))),
@@ -368,8 +370,8 @@ sqr :: Num a => a -> a
 sqr x = x * x
 
 dist :: Datum -> Datum -> Float
-dist a b = sqrt ((sqr $ (fst $ location a) - (fst $ location b))
-                 + (sqr $ (snd $ location a) - (snd $ location b))
+dist a b = sqrt ((sqr $ (fst $ location a) - (fst $ applied_location b))
+                 + (sqr $ (snd $ location a) - (snd $ applied_location b))
                 )
            
 -- Recursively build the parse tree

@@ -25,19 +25,22 @@ import Data.Colour.RGBSpace.HSV (hsv)
 import qualified GHC.Word 
 import Data.Bits
 import Data.Ratio
-import Tempo
 import Debug.Trace (trace)
 import Data.Fixed (mod')
+import Control.Concurrent
+
+import Sound.OSC.FD
 
 import Texture.Utils
 import Texture.Interp (start, interpretPat, Job (OscJob, ColourJob))
-import Stream (OscPattern)
-import Dirt
-import Pattern
-import qualified Time
+import Sound.Tidal.Stream (OscPattern)
+import Sound.Tidal.Dirt
+import Sound.Tidal.Pattern
+import Sound.Tidal.Tempo
+import qualified Sound.Tidal.Time as Time
 
-screenWidth  = 800
-screenHeight = 600
+screenWidth  = 1024
+screenHeight = 768
 screenBpp    = 32
 
 xDivider = 0.75
@@ -89,7 +92,7 @@ parseScene s =
 
 evalScene :: Scene -> AppEnv (Scene)
 evalScene scene = 
-  do let s = parseScene $ withSource scene clearMouseOffset
+  do let s = parseScene $ scene
          code = T.walkTreesWhere (T.isOscPattern . T.applied_as) (parsed s)
      liftIO $ mapM_ (\d -> putStrLn $ T.token d ++ ": " ++ (show $ T.applied_as d)) (parsed s)
      if (null code) 
@@ -213,16 +216,25 @@ handleEvent s (MouseMotion x y _ _) =
 --return $ parseScene $ source $ withSource scene (\ws -> moveWord ws (fromScreen (fromIntegral x, fromIntegral y)))
 
 handleEvent scene (MouseButtonDown x y ButtonLeft) = 
-  finishTyping $ updateScene $ instructionAt (source scene) xy 
-  where updateScene Nothing = scene {cursor = xy}
+  do let scene' = updateScene clicked $ finishTyping $ scene
+     mods <- liftIO getState
+     let w = do word <- clicked
+                let word' | ctrlDown mods = word {status = Typing}
+                          | otherwise = word
+     updateScene $ setMouseOffset xy $ setTyping mods
+  where clicked = instructionAt (source scene) xy
+        updateScene Nothing = scene {cursor = xy}
         updateScene (Just w) = 
-          scene {source = updateWord (source scene) (setMouseOffset xy w)}
+          scene {source = updateWord (source scene) 
         xy = fromScreen (fromIntegral x, fromIntegral y)
+        ctrlDown = elem KeyModCtrl mods
+ = clicked {status = Typing}
+                         | otherwise = return ()
 
-handleEvent scene (MouseButtonUp x y ButtonLeft) = evalScene scene
+handleEvent scene (MouseButtonUp x y ButtonLeft) = evalScene $ withSource scene clearMouseOffset
 
 handleEvent scene (KeyDown k) =
-  handleKey scene (getKeyName $ symKey k) (symModifiers k)
+     handleKey scene (symKey k) (symUnicode k) (symModifiers k)
 
 handleEvent scene _ = return scene
 
@@ -244,32 +256,38 @@ updateSize i scene =
   where w = wordByIdent (source scene) i
         updateCursor w s = s {cursor = topRight w}
 
-handleKey :: Scene -> String -> [Modifier] -> AppEnv Scene
-handleKey scene (c:[]) mods = 
-  do let w = (typing scene) 
-         w' = w {token = (token w) ++ [c]}
-     updateSize (ident w') $ withSource scene (\ws -> updateAddWord ws w')
+handleKey :: Scene -> SDLKey -> Char -> [Modifier] -> AppEnv Scene
 
-handleKey scene "space" mods = 
+handleKey scene SDLK_SPACE _ _ = 
   finishTyping $ scene {cursor = addBlank $ topRight (typing scene)}
   where addBlank (x,y) = (x+blankWidth,y)
 
-handleKey scene "return" mods = 
+handleKey scene SDLK_RETURN _ _ = 
   finishTyping $ scene {cursor = bottomLeft (typing scene)}
 
-handleKey scene "backspace" mods = 
+handleKey scene SDLK_BACKSPACE _ _ = 
   deleteChar $ getTyping (source scene)
   where deleteChar (Just w) | length (token w) > 1 = updateSize (ident w) $ withSource scene (\ws -> updateWord ws (w {token = Prelude.init (token w)}))
                             | otherwise = return $ withSource scene (\ws -> removeWord ws w)
         deleteChar Nothing = return $ scene {cursor = removeBlank $ cursor scene}
         removeBlank (x,y) = (x-blankWidth,y)        
 
-handleKey scene "delete" mods = handleKey scene "backspace" mods
-        
+handleKey scene SDLK_DELETE c mods = handleKey scene SDLK_BACKSPACE c mods
 
-handleKey scene s _ = 
-  do liftIO $ putStrLn s
-     return scene
+handleKey scene _ c _ 
+  | isKey c = do let w = (typing scene) 
+                     w' = w {token = (token w) ++ [c]}
+                 updateSize (ident w') $ withSource scene (\ws -> updateAddWord ws w')
+  | otherwise = do liftIO $ putStrLn [c]
+                   return scene
+
+isKey c = elem c s
+  where s = concat [['a' .. 'z'],
+                    ['A' .. 'Z'],
+                    ['0' .. '9'],
+                    "!\"£$%^&*()[]~@:#;?></.,|{}=+_\\"
+                   ]
+
 
 resetPats :: [Word] -> [Word]
 resetPats = map (\w -> w {pat = Nothing})
@@ -289,7 +307,7 @@ interpretPats s = do ps <- pats
              liftIO $ putMVar i job
              p <- liftIO $ takeMVar o
              let w = wordByIdent (source s) (T.ident d)
-             return $ w {pat = Just p}
+             return $ w {pat = p}
         pats = mapM simpleJob patterned
         metas :: [(T.Datum, T.Type, String)]
         metas = catMaybes $ map (T.guessTransform (parsed s)) (parsed s)
@@ -300,9 +318,10 @@ data AppConfig = AppConfig {
   font         :: Font,
   input        :: MVar Job,
   oscOutput    :: MVar OscPattern,
-  colourOutput :: MVar (Pattern (Colour Double)),
+  colourOutput :: MVar (Maybe (Pattern (Colour Double))),
   tempoMV      :: MVar (Tempo),
-  fr           :: FR.FPSManager
+  fr           :: FR.FPSManager,
+  mxyz         :: MVar (Float, Float, Float)
 }
 
 type AppState = StateT Scene IO
@@ -324,9 +343,28 @@ initEnv = do
     fps <- FR.new
     FR.set fps 20
     FR.init fps
-    return $ AppConfig screen font i oscO colourO tempoMV fps
+    m <- kateThread
+    return $ AppConfig screen font i oscO colourO tempoMV fps m
 
 blankWidth = 0.015
+
+-- TODO - find out how to specify inaddr_any
+kateThread = do x <- udpServer "127.0.0.1" 1234
+                mv <- newMVar (0,0,0) 
+                forkIO $ kateLoop x mv
+                return mv
+  where kateLoop x mv = do m <- recvMessage x
+                           act m mv
+                           kateLoop x mv
+        act (Just (Message "/kill" [])) mv = 
+          do swapMVar mv (-1,-1,-1) 
+             putStrLn "*** END ***"
+             return ()
+        act (Just (Message "/isadora/1" [Float x, Float y, Float z])) mv =
+          do putStrLn $ "got :" ++ show x ++ ", " ++ show y ++ ", " ++ show z
+             swapMVar mv (x,y,z)
+             return ()
+        act _ _ = return ()
 
 drawCursor :: Scene -> Font -> Surface -> Double -> IO ()
 drawCursor scene ft screen beat = 
@@ -379,7 +417,7 @@ wordByDatum ws d = wordByIdent ws (T.ident d)
  
 drawPat :: Int -> Float -> Float -> Float -> Float -> Maybe (Pattern (Colour Double)) -> Surface -> Double -> IO ()
 drawPat n x1 y1 x2 y2 (Nothing) screen _ = 
-  do (thickLine True n 0.008 x2 y2 x1 y1) screen lineColor
+  do (thickLine True n 0.014 x2 y2 x1 y1) screen lineColor
      return ()
   where lineColor = rgbColor 127 127 127
 
@@ -392,7 +430,7 @@ drawPat n x1 y1 x2 y2 (Just p) screen beat = mapM_ drawEvents es
         drawEvents ((s,e), cs) = 
           mapM_ (\(n', (h, c)) -> drawEvent h (s,e) c n' (length cs)) (enumerate cs)
         drawEvent h (s,e) c n' scale = 
-          (thickLine h (n*scale+n') (0.008/ (fromIntegral scale))
+          (thickLine h (n*scale+n') (0.014/ (fromIntegral scale))
            (x1 + (xd * fromRational (e-pos)))
            (y1 + (yd * fromRational (e-pos)))
            (x1 + (xd * fromRational (s-pos))) 
@@ -463,10 +501,23 @@ thickLineArrow n thickness x1 y1 x2 y2 =
                        (x2+incX, y2+incY)
                       ]
 
+moveKate :: AppEnv ()
+moveKate = do kate <- mxyz `liftM` ask              
+              scene <- get
+              (x,y,z) <- liftIO $ readMVar kate
+              let scene' = parseScene $ scene {source = setFirstXYZ (source scene) (x,y,z)}
+              scene'' <- evalScene scene'
+              put scene''
+              return ()
+  where setFirstXYZ [] _ = []
+        setFirstXYZ (w:ws) (x,y,z) | status w == Active = (w {location = (x,y)}):ws
+                                   | otherwise = w:(setFirstXYZ ws (x,y,z))
+
 
 loop :: AppEnv ()
 loop = do
     quit <- whileEvents $ act
+    moveKate
     screen <- screen `liftM` ask
     font <- font `liftM` ask
     tempoM <- tempoMV `liftM` ask
@@ -525,7 +576,8 @@ run = withInit [InitEverything] $
       do result <- TTFG.init
          if not result
            then putStrLn "Failed to init ttf"
-           else do env <- initEnv
+           else do enableUnicode True
+                   env <- initEnv
                    ws <- wordMenu (font env) things
                    let scene = parseScene $ Scene ws [] (0,0) (0.5,0.5)
                    --putStrLn $ show scene

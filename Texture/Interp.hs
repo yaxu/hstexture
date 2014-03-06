@@ -6,10 +6,11 @@ import Control.Monad
 import Control.Concurrent
 import Control.Concurrent.MVar
 import Language.Haskell.Interpreter
-import Sound.OpenSoundControl.Type
+import Sound.OSC.FD
+import Sound.OSC.Datum
 
-import Stream
-import Pattern
+import Sound.Tidal.Stream
+import Sound.Tidal.Pattern
 import qualified Texture.Types as T
 import Data.Colour
 import Data.Colour.Names
@@ -20,12 +21,12 @@ import Data.Bits
 import Data.Typeable
 deriving instance Typeable Param
 deriving instance Typeable1 Pattern
-deriving instance Typeable Sound.OpenSoundControl.Type.Datum
+deriving instance Typeable Sound.OSC.FD.Datum
 
 data Job = OscJob String
          | ColourJob T.Type String
 
-start :: MVar OscPattern -> MVar (Pattern (Colour Double)) -> IO (MVar Job)
+start :: MVar OscPattern -> MVar (Maybe (Pattern (Colour Double))) -> IO (MVar Job)
 start oscOut colourOut = do input <- newEmptyMVar
                             forkIO $ loop input 
                             return input
@@ -37,13 +38,13 @@ start oscOut colourOut = do input <- newEmptyMVar
              loop input
 
 libs = [("Prelude", Nothing), 
-        ("Stream", Nothing), ("Dirt", Nothing), ("Pattern", Nothing),
-        ("Data.Map", Nothing), ("Sound.OpenSoundControl", Nothing),
-        ("Parse", Nothing),
+        ("Sound.Tidal.Stream", Nothing), ("Sound.Tidal.Dirt", Nothing), ("Sound.Tidal.Pattern", Nothing),
+        ("Data.Map", Nothing), ("Sound.OSC", Nothing),
+        ("Sound.Tidal.Parse", Nothing),
         ("Control.Applicative", Nothing)
        ]
 
-runI :: MVar Job -> MVar OscPattern -> MVar (Pattern (Colour Double)) -> Interpreter ()
+runI :: MVar Job -> MVar OscPattern -> MVar (Maybe (Pattern (Colour Double))) -> Interpreter ()
 runI input oscOut colourOut =
     do
       --loadModules ["Stream.hs"]
@@ -57,12 +58,12 @@ runI input oscOut colourOut =
           doJob thing
           loop
         doJob (OscJob code) = do p <- interpret code (as :: OscPattern)
-                                 say (show p)
+                                 say ("interpreting: " ++ show p)
                                  liftIO $ swapMVar oscOut p
                                  return ()
         doJob (ColourJob t code) = do p <- interpretPat t code
                                       say $ "interpreting: " ++ code ++ " type " ++ (show t)
-                                      say $ " as: " ++ (show p)
+                                      say $ " as colour pattern: " ++ (show p)
                                       liftIO $ putMVar colourOut p
                                       return ()
 
@@ -93,13 +94,16 @@ say = liftIO . putStrLn
 printInterpreterError :: InterpreterError -> IO ()
 printInterpreterError e = putStrLn $ "Oops. " ++ (show e)
 
-interpretPat :: T.Type -> String -> Interpreter (Pattern (Colour Double))
+interpretPat :: T.Type -> String -> Interpreter (Maybe (Pattern (Colour Double)))
 
 interpretPat T.String code = 
-  do setImportsQ libs
-     p <- interpret code (as :: Pattern String)
-     return $ fmap stringToColour p
-interpretPat _ _ = return silence
+  do p <- interpret code (as :: Pattern String)
+     return $ Just $ fmap stringToColour p
+interpretPat T.Float code =
+  do p <- interpret code (as :: Pattern Double)
+     return $ Just $ fmap (stringToColour . show) p
+--   
+interpretPat _ _ = return Nothing
 
 stringToColour :: String -> Colour Double
 stringToColour s = sRGB (r/256) (g/256) (b/256)
