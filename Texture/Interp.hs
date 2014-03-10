@@ -102,7 +102,12 @@ interpretPat T.String code =
 interpretPat T.Float code =
   do p <- interpret code (as :: Pattern Double)
      return $ Just $ fmap (stringToColour . show) p
---   
+
+{-interpretPat T.OscStream code =
+  do p <- interpret code (as :: OscPattern)
+     return $ Just $ fmap (stringToColour . show) p
+-}
+
 interpretPat _ _ = return Nothing
 
 stringToColour :: String -> Colour Double

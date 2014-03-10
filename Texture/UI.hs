@@ -43,7 +43,8 @@ screenWidth  = 1024
 screenHeight = 768
 screenBpp    = 32
 
-xDivider = 0.75
+--xDivider = 0.75
+xDivider = 1
 
 data WordStatus = Active
                 | Tentative
@@ -94,7 +95,7 @@ evalScene :: Scene -> AppEnv (Scene)
 evalScene scene = 
   do let s = parseScene $ scene
          code = T.walkTreesWhere (T.isOscPattern . T.applied_as) (parsed s)
-     liftIO $ mapM_ (\d -> putStrLn $ T.token d ++ ": " ++ (show $ T.applied_as d)) (parsed s)
+     liftIO $ mapM_ (\d -> putStrLn $ T.token d ++ ": " ++ (show $ T.applied_as d)) (filter (not . T.hasParent) $ parsed s)
      if (null code) 
        then return s
        else do let code' = "stack [" ++ (intercalate ", " code) ++ "]"
@@ -216,20 +217,23 @@ handleEvent s (MouseMotion x y _ _) =
 --return $ parseScene $ source $ withSource scene (\ws -> moveWord ws (fromScreen (fromIntegral x, fromIntegral y)))
 
 handleEvent scene (MouseButtonDown x y ButtonLeft) = 
-  do let scene' = updateScene clicked $ finishTyping $ scene
-     mods <- liftIO getState
+  do scene' <- finishTyping scene
+     mods <- liftIO getModState
+     liftIO $ putStrLn $ show mods
+     -- Maybe monad here
      let w = do word <- clicked
                 let word' | ctrlDown mods = word {status = Typing}
                           | otherwise = word
-     updateScene $ setMouseOffset xy $ setTyping mods
+                return $ setMouseOffset xy $ word'
+     return $ updateScene w
   where clicked = instructionAt (source scene) xy
         updateScene Nothing = scene {cursor = xy}
-        updateScene (Just w) = 
-          scene {source = updateWord (source scene) 
+        updateScene (Just w) = scene {source = updateWord (source scene) w}
         xy = fromScreen (fromIntegral x, fromIntegral y)
-        ctrlDown = elem KeyModCtrl mods
- = clicked {status = Typing}
-                         | otherwise = return ()
+        ctrlDown mods = or $ map (\x -> elem x [KeyModLeftCtrl, 
+                                                KeyModRightCtrl
+                                               ]
+                                 ) mods
 
 handleEvent scene (MouseButtonUp x y ButtonLeft) = evalScene $ withSource scene clearMouseOffset
 
@@ -502,13 +506,14 @@ thickLineArrow n thickness x1 y1 x2 y2 =
                       ]
 
 moveKate :: AppEnv ()
-moveKate = do kate <- mxyz `liftM` ask              
+moveKate = do kate <- mxyz `liftM` ask
               scene <- get
-              (x,y,z) <- liftIO $ readMVar kate
-              let scene' = parseScene $ scene {source = setFirstXYZ (source scene) (x,y,z)}
-              scene'' <- evalScene scene'
-              put scene''
-              return ()
+              xyz <- liftIO $ tryTakeMVar kate
+              if (isJust xyz) 
+                then do let scene' = parseScene $ scene {source = setFirstXYZ (source scene) (fromJust xyz)}
+                        scene'' <- evalScene scene'
+                        put scene''
+                else return ()
   where setFirstXYZ [] _ = []
         setFirstXYZ (w:ws) (x,y,z) | status w == Active = (w {location = (x,y)}):ws
                                    | otherwise = w:(setFirstXYZ ws (x,y,z))
@@ -517,7 +522,7 @@ moveKate = do kate <- mxyz `liftM` ask
 loop :: AppEnv ()
 loop = do
     quit <- whileEvents $ act
-    moveKate
+    --moveKate
     screen <- screen `liftM` ask
     font <- font `liftM` ask
     tempoM <- tempoMV `liftM` ask
@@ -578,7 +583,8 @@ run = withInit [InitEverything] $
            then putStrLn "Failed to init ttf"
            else do enableUnicode True
                    env <- initEnv
-                   ws <- wordMenu (font env) things
+                   --ws <- wordMenu (font env) things
+                   let ws = []
                    let scene = parseScene $ Scene ws [] (0,0) (0.5,0.5)
                    --putStrLn $ show scene
                    runLoop env scene

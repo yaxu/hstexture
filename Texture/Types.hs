@@ -23,7 +23,7 @@ data Type =
   | Pattern Type
   | WildCard
   | Param Int
-  | List Type
+  | ListCon Type
 
 instance Eq Type where
   F a a' == F b b' = and [a == b,
@@ -38,7 +38,7 @@ instance Eq Type where
   Pattern a == Pattern b = a == b
   WildCard == WildCard = True
   Param a == Param b = a == b
-  List a == List b = a == b
+  ListCon a == ListCon b = a == b
   _ == _ = False
 
 -- Type signature
@@ -85,8 +85,9 @@ functions =
    ),
    ("rev", Sig [WildCard] $ F (Pattern $ Param 0) (Pattern $ Param 0)),
    ("pick", Sig [] $ F String (F Int String)),
-   ("[", Sig [OneOf [String,Int,Float]] (F (List (Param 0)) (Pattern (Param 0)))),
-   ("]", Sig [OneOf [String,Int,Float]] (List (Param 0))),
+   ("]", Sig [OneOf [String,Int,Float]] (ListCon (Param 0))),
+   ("[", Sig [OneOf [String,Int,Float]] (F (ListCon (Param 0)) (Pattern (Param 0))))
+  {-,
    ("bd", prependString),
    ("sn", prependString),
    ("hc", prependString),
@@ -97,16 +98,7 @@ functions =
    ("o", prependString),
    ("u", prependString),
    ("gabba", prependString),
-   ("~", prependString),
-   ("0", Sig [] number),
-   ("0.5", Sig [] number),
-   ("1", Sig [] number),
-   ("2", Sig [] number),
-   ("3", Sig [] number),
-   ("4", Sig [] number),
-   ("5", Sig [] number),
-   ("6", Sig [] number),
-   ("7", Sig [] number)
+   ("~", prependString)-}
    ]
   where numOp = Sig [number] $ F (Param 0) $ F (Param 0) (Param 0)
         floatOp = Sig [] $ F Float (F Float Float)
@@ -115,8 +107,10 @@ functions =
         stringToOsc = Sig [] $ F (Pattern String) (Pattern Osc)
         floatToOsc = Sig [] $ F (Pattern Float) (Pattern Osc)
 
+{-
 prepender a = Sig [] $ F (List a) (List a)
 prependString = prepender String
+-}
 {-
 [ :: List a -> Pattern a
 ] :: a -> List a
@@ -144,7 +138,7 @@ instance Show Type where
   show (Param n) = "param#" ++ (show n)
   show (Osc) = "osc"
   show (OscStream) = "stream"
-  show (List t) = "list [" ++ (show t) ++ "]"
+  show (ListCon t) = "list [" ++ (show t) ++ "]"
 
 walkTreesWhere :: (Datum -> Bool) -> [Datum] -> [String]
 walkTreesWhere f ds = map (walkTree ds) $ tops
@@ -154,7 +148,7 @@ walkTree :: [Datum] -> Datum -> String
 
 walkTree ds d@(Datum {token = "["}) = 
   "(p \"" ++ contents ++ "\")"
-  where contents = intercalate " " $ map token (offspring ds d)
+  where contents = intercalate " " $ map token (tail $ offspring ds d)
 walkTree ds d@(Datum {token = "]"}) = ""
 
 walkTree ds d = value d ++ ps -- ++ " :: " ++ (show $ applied_as d) ++ " parent " ++ (show $ parentId d)
@@ -166,6 +160,10 @@ number = OneOf [Float, Int]
 isFunction :: Type -> Bool
 isFunction (F _ _) = True
 isFunction _ = False
+
+isListCon :: Type -> Bool
+isListCon (ListCon _) = True
+isListCon _ = False
 
 isPattern :: Type -> Bool
 isPattern (Pattern _) = True
@@ -203,7 +201,10 @@ concreteType (Sig ps (Param n)) = concreteType (Sig ps (ps !! n))
 concreteType (Sig _ x) = x
 
 wantsParam :: Datum -> Bool
-wantsParam d = (parentId d) == Nothing && (isFunction $ is $ applied_as $ d)
+wantsParam d = (parentId d) == Nothing && (isFunction t
+                                           || isListCon t
+                                          )
+  where t = is $ applied_as $ d
 
 parent :: Datum -> [Datum] -> Maybe Datum
 parent d ds = do i <- parentId d
@@ -267,10 +268,14 @@ stringToType s = scanType Int s
 
 stringToSig :: String -> Sig
 stringToSig s = fromMaybe def $ lookup s functions
+  where def = Sig [] (stringToType s)
+
+{-
+stringToSig :: String -> Sig
+stringToSig s = fromMaybe def $ lookup s functions
   where def | stringToType s == String = prependString
             | otherwise = Sig [] (stringToType s)
-
-
+-}
 
 fits :: Sig -> Sig -> Bool
 fits (Sig _ WildCard) _ = True
@@ -289,7 +294,7 @@ fits (Sig pA a) (Sig pB (OneOf bs)) =
 
 fits (Sig pA (Pattern a)) (Sig pB (Pattern b)) = fits (Sig pA a) (Sig pB b)
 
-fits (Sig pA (List a)) (Sig pB (List b)) = fits (Sig pA a) (Sig pB b)
+fits (Sig pA (ListCon a)) (Sig pB (ListCon b)) = fits (Sig pA a) (Sig pB b)
 
 fits (Sig pA a) (Sig pB (Param b)) = fits (Sig pA a) (Sig pB (pB !! b))
 fits (Sig pA (Param a)) (Sig pB b) = fits (Sig pA (pA !! a)) (Sig pB b)
@@ -343,7 +348,7 @@ resolve (Sig _ WildCard) b = b
 resolve (Sig pA (Pattern a)) (Sig pB (Pattern b)) = Sig pA' (Pattern a')
   where (Sig pA' a') =  resolve (Sig pA a) (Sig pB b)
 
-resolve (Sig pA (List a)) (Sig pB (List b)) = Sig pA' (List a')
+resolve (Sig pA (ListCon a)) (Sig pB (ListCon b)) = Sig pA' (ListCon a')
   where (Sig pA' a') =  resolve (Sig pA a) (Sig pB b)
 
 resolve a b = a
@@ -420,10 +425,12 @@ datumByIdent i ds = head $ filter (\d -> ident d == i) ds
 
 output :: Sig -> Sig
 output (Sig ps (F _ x)) = Sig ps x
+output x@(Sig _ (ListCon _)) = x
 output _ = error "No output from non-function"
 
 input :: Sig -> Sig
 input (Sig ps (F x _)) = Sig ps x
+input (Sig ps (ListCon x)) = Sig ps x
 input _ = error "No input to non-function"
 
 
