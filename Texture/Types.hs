@@ -64,6 +64,9 @@ functions =
    ("floor", Sig [] $ F Float Int),
    ("sinewave", floatPat),
    ("sinewave1", floatPat),
+   ("sine", floatPat),
+   ("sine1", floatPat),
+   ("run", Sig [] $ F Int (Pattern Int)),
    ("fmap", mapper),
    ("<$>", mapper),
    ("<*>", Sig [WildCard, WildCard] $ F (Pattern $ F (Param 0) (Param 1)) (F (Pattern (Param 0)) (Pattern (Param 1)))),
@@ -78,12 +81,20 @@ functions =
    ("silence", Sig [] $ Pattern WildCard),
    ("density", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("slow", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
+   ("iter", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("every", Sig [WildCard] $ F (Int) 
              (F (F (Pattern $ Param 0) (Pattern $ Param 0)) 
                 (F (Pattern $ Param 0) (Pattern $ Param 0))
              )
    ),
+   ("jux", Sig 
+           [WildCard]  
+           (F (F (Pattern $ Param 0) (Pattern $ Param 0)) 
+            (F (Pattern $ Param 0) (Pattern $ Param 0))
+           )
+   ),
    ("rev", Sig [WildCard] $ F (Pattern $ Param 0) (Pattern $ Param 0)),
+   ("brak", Sig [WildCard] $ F (Pattern $ Param 0) (Pattern $ Param 0)),
    ("pick", Sig [] $ F String (F Int String)),
    ("]", Sig [OneOf [String,Int,Float]] (ListCon (Param 0))),
    ("[", Sig [OneOf [String,Int,Float]] (F (ListCon (Param 0)) (Pattern (Param 0))))
@@ -139,6 +150,14 @@ instance Show Type where
   show (Osc) = "osc"
   show (OscStream) = "stream"
   show (ListCon t) = "list [" ++ (show t) ++ "]"
+
+printDists :: [Datum] -> IO ()
+printDists ds = mapM_ (\(a, b) -> putStrLn (token a ++ " -> " ++ token b ++ ": " ++ show (dist a b))) ps
+  where ps = paired ds
+
+paired :: [Datum] -> [(Datum, Datum)]
+paired ds = map (\x -> (x, datumByIdent (fromJust $ parentId x) ds)) children
+  where children = filter ((/= Nothing) . parentId) ds
 
 walkTreesWhere :: (Datum -> Bool) -> [Datum] -> [String]
 walkTreesWhere f ds = map (walkTree ds) $ tops
@@ -375,8 +394,8 @@ sqr :: Num a => a -> a
 sqr x = x * x
 
 dist :: Datum -> Datum -> Float
-dist a b = sqrt ((sqr $ (fst $ location a) - (fst $ applied_location b))
-                 + (sqr $ (snd $ location a) - (snd $ applied_location b))
+dist a b = sqrt ((sqr $ (fst $ applied_location a) - (fst $ location b))
+                 + (sqr $ (snd $ applied_location a) - (snd $ location b))
                 )
            
 -- Recursively build the parse tree
@@ -409,9 +428,10 @@ dists things x = map (\fitter -> (dist x fitter, (x, fitter))) fitters
 updateLinks :: [Datum] -> (Datum, Datum) -> [Datum]
 updateLinks ds (a, b) = appendChild ds' (a', b')
   where s = resolve (input $ applied_as a) (applied_as $ b)
-        a' = a {applied_as = (output (applied_as a)) {params = params s}
+        a' = a {applied_as = (output (applied_as a)) {params = params s},
+                applied_location = applied_location b
                }
-        b' = b {applied_location = applied_location a}
+        b' = b
         ds' = update a' ds
 
 
