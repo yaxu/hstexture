@@ -17,6 +17,11 @@ import Data.Colour.Names
 import Data.Colour.SRGB
 import Data.Hashable
 import Data.Bits
+import Data.Maybe
+import Sound.Tidal.Dirt
+import qualified Data.Map as Map
+import Control.Applicative
+import qualified Data.ByteString.Char8 as C
 
 import Data.Typeable
 deriving instance Typeable Param
@@ -38,9 +43,8 @@ start oscOut colourOut = do input <- newEmptyMVar
              loop input
 
 libs = [("Prelude", Nothing), 
-        ("Sound.Tidal.Stream", Nothing), ("Sound.Tidal.Dirt", Nothing), ("Sound.Tidal.Pattern", Nothing),
+        ("Sound.Tidal.Context", Nothing),
         ("Data.Map", Nothing), ("Sound.OSC", Nothing),
-        ("Sound.Tidal.Parse", Nothing),
         ("Control.Applicative", Nothing)
        ]
 
@@ -68,7 +72,6 @@ runI input oscOut colourOut =
                                       return ()
 
 
-          
 {-
 run2 :: String -> Interpreter (Pattern (Colour Double))
 run2 input output =
@@ -99,20 +102,32 @@ interpretPat :: T.Type -> String -> Interpreter (Maybe (Pattern (Colour Double))
 interpretPat T.String code = 
   do p <- interpret code (as :: Pattern String)
      return $ Just $ fmap stringToColour p
+
 interpretPat T.Float code =
   do p <- interpret code (as :: Pattern Double)
      return $ Just $ fmap (stringToColour . show) p
 
-{-interpretPat T.OscStream code =
+interpretPat T.Osc code =
   do p <- interpret code (as :: OscPattern)
-     return $ Just $ fmap (stringToColour . show) p
--}
+     return $ Just $ stringToColour <$> unosc p
 
 interpretPat _ _ = return Nothing
 
+unosc :: Pattern (Map.Map Param (Maybe Datum)) -> Pattern String
+unosc p = (\x -> fromMaybe (show x) (soundString x)) <$> p
+
+soundString :: Map.Map Param (Maybe Datum) -> Maybe [Char]
+soundString o = do m <- Map.lookup (S "sound" Nothing) o
+                   s <- m
+                   -- hack to turn ASCII into String
+                   return $ tail $ init $ show $ d_ascii_string s
+
+
+{-
 stringToColour :: String -> Colour Double
 stringToColour s = sRGB (r/256) (g/256) (b/256)
   where i = (hash s) `mod` 16777216
         r = fromIntegral $ (i .&. 0xFF0000) `shiftR` 16;
         g = fromIntegral $ (i .&. 0x00FF00) `shiftR` 8;
         b = fromIntegral $ (i .&. 0x0000FF);
+-}
