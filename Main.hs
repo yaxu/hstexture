@@ -1,5 +1,8 @@
 module Main where
 
 import Texture.UI (run)
+import Texture.Types
 
-main = run
+main = do putStrLn showFunctions
+          run
+

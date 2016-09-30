@@ -19,19 +19,20 @@ import Data.Hashable
 import Data.Bits
 import Data.Maybe
 import Sound.Tidal.Dirt
+import Sound.Tidal.OscStream
 import qualified Data.Map as Map
 import Control.Applicative
 import qualified Data.ByteString.Char8 as C
 
 import Data.Typeable
 deriving instance Typeable Param
-deriving instance Typeable1 Pattern
+-- deriving instance Typeable1 Pattern
 deriving instance Typeable Sound.OSC.FD.Datum
 
 data Job = OscJob String
          | ColourJob T.Type String
 
-start :: MVar OscPattern -> MVar (Maybe (Pattern (Colour Double))) -> IO (MVar Job)
+start :: (ParamPattern -> IO ()) -> MVar (Maybe (Pattern (Colour Double))) -> IO (MVar Job)
 start oscOut colourOut = do input <- newEmptyMVar
                             forkIO $ loop input 
                             return input
@@ -48,7 +49,7 @@ libs = [("Prelude", Nothing),
         ("Control.Applicative", Nothing)
        ]
 
-runI :: MVar Job -> MVar OscPattern -> MVar (Maybe (Pattern (Colour Double))) -> Interpreter ()
+runI :: MVar Job -> (ParamPattern -> IO ()) -> MVar (Maybe (Pattern (Colour Double))) -> Interpreter ()
 runI input oscOut colourOut =
     do
       --loadModules ["Stream.hs"]
@@ -61,13 +62,13 @@ runI input oscOut colourOut =
           --say =<< Language.Haskell.Interpreter.typeOf expr
           doJob thing
           loop
-        doJob (OscJob code) = do p <- interpret code (as :: OscPattern)
-                                 say ("interpreting: " ++ show p)
-                                 liftIO $ swapMVar oscOut p
+        doJob (OscJob code) = do -- say ("interpreting: " ++ code)
+                                 p <- interpret code (as :: (ParamPattern))
+                                 liftIO $ oscOut p
                                  return ()
-        doJob (ColourJob t code) = do p <- interpretPat t code
-                                      say $ "interpreting: " ++ code ++ " type " ++ (show t)
-                                      say $ " as colour pattern: " ++ (show p)
+        doJob (ColourJob t code) = do -- say $ "interpreting: " ++ code ++ " type " ++ (show t)
+                                      p <- interpretPat t code
+                                      -- say $ " as colour pattern: " ++ (show p)
                                       liftIO $ putMVar colourOut p
                                       return ()
 
@@ -85,7 +86,7 @@ run2 input output =
           expr <- liftIO (takeMVar input)
           say =<< Language.Haskell.Interpreter.typeOf expr
 
-          p <- interpret expr (as :: OscPattern)
+          p <- interpret expr (as :: (ParamPattern))
           say (show p)
           liftIO $ swapMVar output p
           loop
@@ -108,19 +109,19 @@ interpretPat T.Float code =
      return $ Just $ fmap (stringToColour . show) p
 
 interpretPat T.Osc code =
-  do p <- interpret code (as :: OscPattern)
+  do p <- interpret code (as :: (ParamPattern))
      return $ Just $ stringToColour <$> unosc p
 
 interpretPat _ _ = return Nothing
 
-unosc :: Pattern (Map.Map Param (Maybe Datum)) -> Pattern String
+unosc :: Pattern (Map.Map Param (Maybe Value)) -> Pattern String
 unosc p = (\x -> fromMaybe (show x) (soundString x)) <$> p
 
-soundString :: Map.Map Param (Maybe Datum) -> Maybe [Char]
+soundString :: Map.Map Param (Maybe Value) -> Maybe [Char]
 soundString o = do m <- Map.lookup (S "sound" Nothing) o
                    s <- m
                    -- hack to turn ASCII into String
-                   return $ tail $ init $ show $ d_ascii_string s
+                   return $ tail $ init $ show $ s
 
 
 {-

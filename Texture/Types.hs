@@ -11,7 +11,6 @@ import Texture.Utils
 --type Id = Int
 --type Proximity = Float
 
-
 data Type = 
   F Type Type
   | String
@@ -53,6 +52,10 @@ instance Show Sig where
              | otherwise = show (params s) ++ " => "
 
 
+showFunctions :: String
+showFunctions = concatMap f functions
+  where f (s, t) = s ++ " :: " ++ show t ++ "\n"
+
 functions :: [(String, Sig)]
 functions = 
   [("+", numOp),
@@ -74,25 +77,36 @@ functions =
    ("vowel", stringToOsc),
    ("shape", floatToOsc),
    ("speed", floatToOsc),
+   ("delay", floatToOsc),
    ("pan", floatToOsc),
    ("overlay", Sig [WildCard] $ F (Pattern $ Param 0) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("append", Sig [WildCard] $ F (Pattern $ Param 0) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("append'", Sig [WildCard] $ F (Pattern $ Param 0) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("silence", Sig [] $ Pattern WildCard),
-   ("density", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
-   ("slow", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
+   ("density", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
+   ("slow", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("iter", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
+   ("spin", Sig [] $ F (Int) (F (Pattern $ Osc) (Pattern $ Osc))),
+   ("stut", Sig [] $ F (Int) $ F (Float) $ F (Float) $ (F (Pattern Osc) (Pattern Osc))),
+   ("<~", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
+   ("~>", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("every", Sig [WildCard] $ F (Int) 
              (F (F (Pattern $ Param 0) (Pattern $ Param 0)) 
                 (F (Pattern $ Param 0) (Pattern $ Param 0))
              )
    ),
    ("jux", Sig 
-           [WildCard]  
-           (F (F (Pattern $ Param 0) (Pattern $ Param 0)) 
-            (F (Pattern $ Param 0) (Pattern $ Param 0))
+           []  
+           (F (F (Pattern Osc) (Pattern Osc))
+            (F (Pattern Osc) (Pattern Osc))
            )
    ),
+   ("superimpose", Sig []  
+                       (F (F (Pattern Osc) (Pattern Osc)) 
+                        (F (Pattern Osc) (Pattern Osc))
+                       )
+   ),
+   ("wedge", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (F (Pattern $ Param 0) (Pattern $ Param 0)))),
    ("rev", Sig [WildCard] $ F (Pattern $ Param 0) (Pattern $ Param 0)),
    ("brak", Sig [WildCard] $ F (Pattern $ Param 0) (Pattern $ Param 0)),
    ("pick", Sig [] $ F String (F Int String)),

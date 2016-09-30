@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 module Texture.UI where
 
 import Control.Monad
@@ -29,20 +30,26 @@ import Debug.Trace (trace)
 import Data.Fixed (mod')
 import Control.Concurrent
 import System.Exit
-
+import System.Random (newStdGen, randomRs)
 import Sound.OSC.FD
 
 import Texture.Utils
 import Texture.Interp (start, interpretPat, Job (OscJob, ColourJob))
-import Sound.Tidal.Stream (OscPattern)
-import Sound.Tidal.Dirt
+import Sound.Tidal.Stream
+import Sound.Tidal.OscStream
+import Sound.Tidal.Dirt (superDirtSetters)
 import Sound.Tidal.Pattern
 import Sound.Tidal.Tempo
 import qualified Sound.Tidal.Time as Time
+import Sound.Tidal.Utils
 
-screenWidth  = 800
-screenHeight = 800
+--myIP = "192.168.0.2"
+myIP = "127.0.0.1"
+
+screenWidth  = 1024
+screenHeight = 768
 screenBpp    = 32
+linesz = 0.012
 
 --xDivider = 0.75
 xDivider = 1
@@ -54,40 +61,42 @@ data WordStatus = Active
                 | MenuItem
                 deriving (Show, Eq)
 
-data Word = Word {ident :: Int,
+data TWord = TWord {ident :: Int,
                   token :: String,
                   location :: (Float, Float),
                   size :: (Float, Float),
                   mousePos :: Maybe (Float, Float),
                   status :: WordStatus,
-                  pat :: Maybe (Pattern (Colour Double))
+                  pat :: Maybe (Pattern (Colour Double)),
+                  energy :: Float,
+                  angle :: Float
                  }
 
-instance Eq Word where
-  (Word {ident = a}) == (Word {ident = b}) = a == b
+instance Eq TWord where
+  (TWord {ident = a}) == (TWord {ident = b}) = a == b
 
-data Scene = Scene {source :: [Word],
+data Scene = Scene {source :: [TWord],
                     parsed :: [T.Datum],
                     mouseXY :: (Float, Float),
                     cursor :: (Float, Float)
                    }
 
-getTyping :: [Word] -> Maybe Word
+getTyping :: [TWord] -> Maybe TWord
 getTyping [] = Nothing
-getTyping (x@(Word {status = Typing}):_) = Just x
+getTyping (x@(TWord {status = Typing}):_) = Just x
 getTyping (_:xs) = getTyping xs
 
-makeTyping :: [Word] -> (Float, Float) -> Word
-makeTyping ws loc = Word (nextIdent ws) "" loc (0,0) Nothing Typing Nothing
+makeTyping :: [TWord] -> (Float, Float) -> TWord
+makeTyping ws loc = TWord (nextIdent ws) "" loc (0,0) Nothing Typing Nothing 0 0
 
-bottomRight :: Word -> (Float, Float)
-bottomRight (Word {location = (x,y), size = (w,h)}) = (x+w, y+h)
+bottomRight :: TWord -> (Float, Float)
+bottomRight (TWord {location = (x,y), size = (w,h)}) = (x+w, y+h)
 
-bottomLeft :: Word -> (Float, Float)
-bottomLeft (Word {location = (x,y), size = (w,h)}) = (x, y+h)
+bottomLeft :: TWord -> (Float, Float)
+bottomLeft (TWord {location = (x,y), size = (w,h)}) = (x, y+h)
 
-topRight :: Word -> (Float, Float)
-topRight (Word {location = (x,y), size = (w,h)}) = (x+w, y)
+topRight :: TWord -> (Float, Float)
+topRight (TWord {location = (x,y), size = (w,h)}) = (x+w, y)
 
 parseScene :: Scene -> Scene
 parseScene s = 
@@ -97,21 +106,23 @@ evalScene :: Scene -> AppEnv (Scene)
 evalScene scene = 
   do let s = parseScene $ scene
          code = T.walkTreesWhere (T.isOscPattern . T.applied_as) (parsed s)
-     liftIO $ T.printDists $ parsed s
-     liftIO $ mapM_ (\d -> putStrLn $ T.token d ++ ": " ++ (show $ T.applied_as d)) (filter (not . T.hasParent) $ parsed s)
+     -- liftIO $ T.printDists $ parsed s
+     -- liftIO $ mapM_ (\d -> putStrLn $ T.token d ++ ": " ++ (show $ T.applied_as d)) (filter (not . T.hasParent) $ parsed s)
      if (null code) 
-       then return s
+       then do i <- input `liftM` ask
+               liftIO $ putMVar i (OscJob "silence")
+               return s
        else do let code' = "stack [" ++ (intercalate ", " code) ++ "]"
                i <- input `liftM` ask
-               liftIO $ putStrLn $ "sending '" ++ code' ++ "'"
+               -- liftIO $ putStrLn $ "sending '" ++ code' ++ "'"
                liftIO $ putMVar i (OscJob code')
                s' <- interpretPats s
                return s'
 
-nextIdent :: [Word] -> Int
+nextIdent :: [TWord] -> Int
 nextIdent ws = head $ filter (\i -> null $ filter ((== i) . ident) ws) [0 ..]
 
-wordToDatum :: Word -> T.Datum
+wordToDatum :: TWord -> T.Datum
 wordToDatum w = T.Datum {T.ident = ident w,
                          T.token = token w,
                          T.location = location w,
@@ -138,24 +149,58 @@ fromScreen (x, y) = ((fromIntegral x) / (fromIntegral screenWidth),
                      (fromIntegral y) / (fromIntegral screenHeight)
                     )
 
-withSource :: Scene -> ([Word] -> [Word]) -> Scene
+withSource :: Scene -> ([TWord] -> [TWord]) -> Scene
 withSource s f = s {source = f $ source s}
 
-withActive :: Scene -> ([Word] -> [Word]) -> Scene
+withActive :: Scene -> ([TWord] -> [TWord]) -> Scene
 withActive s f = withSource s (f . filterActive)
 
-filterActive :: [Word] -> [Word]
+filterActive :: [TWord] -> [TWord]
 filterActive = (filter ((Prelude.flip (elem) [Active,ActiveSelected]) . status))
 
-clearMouseOffset :: [Word] -> [Word]
+clearMouseOffset :: [TWord] -> [TWord]
 clearMouseOffset = (map clearTentative) . (map f) . (filter filtF)
   where f i = i {mousePos = Nothing}
-        filtF i@(Word {status = Tentative, location = (x,_), size = (w,_)}) 
+        filtF i@(TWord {status = Tentative, location = (x,_), size = (w,_)}) 
           = (x + w) <= xDivider
         filtF _ = True
-        clearTentative i@(Word {status = Tentative}) = i {status = Active}
+        clearTentative i@(TWord {status = Tentative}) = i {status = Active}
         clearTentative i = i
 
+nudgeWords :: Scene -> IO Scene
+--nudgeWords s = foldr (nudgeWord) s (source s)
+nudgeWords s = do g <- newStdGen
+                  let as = map ((1/4)-) $ randomRs (0,(1/2) :: Float) g
+                  return $ s {source = map (nudgeWord) (zip (source s) as)}
+
+nudgeWord :: (TWord, Float) -> TWord
+nudgeWord (w,r) | energy w <= 0 = w
+                | otherwise = bounceWord dir $ w {location = (x,y),
+                                                  energy = energy w - (energy w * 0.25)
+                                                 }
+  where dir = (r + angle w) * (pi * 2)
+        ox = (cos dir) * (energy w * 0.25)
+        oy = (sin dir) * (energy w * 0.25)
+        x = (fst $ location w) + ox
+        y = (snd $ location w) + oy
+
+bounceWord dir w@(TWord {location = (x,y), angle = a})
+  | x < 0 = bounceWord dir $ w {location = (0-x,y), angle = a + (0 - dir)}
+  | x >= 1 = bounceWord dir $ w {location = (1-(x-1),y), angle = a + (pi - dir)}
+  | y < 0 = bounceWord dir $ w {location = (x,0-y), angle = a + (pi/2 - dir)}
+  | y >= 1 = bounceWord dir $ w {location = (x,1-(y-1)), angle = a + (pi*1.5 - dir)}
+  | otherwise = w
+
+{-
+if (y < 0) {
+      y = 0 - y;
+      angle += (HALF_PI) - dir;
+    }
+    if (y >= height) {
+      y = height - (y -height);
+      angle += (PI * 1.5) - dir;
+    }
+-}
 moveWord :: Scene -> (Float, Float) -> AppEnv Scene
 moveWord s (x,y) | w == Nothing = return s
                  | otherwise = 
@@ -165,13 +210,13 @@ moveWord s (x,y) | w == Nothing = return s
                       return $ parseScene $ s'
   where w = moving $ source s
 
-moveWord' :: Bool -> Scene -> (Float, Float) -> Word -> AppEnv Scene
-moveWord' ctrl s loc wd@(Word {status = MenuItem}) = moveWord' ctrl (s {source = ws'}) loc newWord
+moveWord' :: Bool -> Scene -> (Float, Float) -> TWord -> AppEnv Scene
+moveWord' ctrl s loc wd@(TWord {status = MenuItem}) = moveWord' ctrl (s {source = ws'}) loc newWord
   where ws = source s
         newWord = wd {status = Tentative, ident = nextIdent ws}
         ws' = newWord:(clearMouseOffset ws)
         
-moveWord' True s (x,y) w = do liftIO $ putStrLn $ show (map ident movingWs)
+moveWord' True s (x,y) w = do -- liftIO $ putStrLn $ show (map ident movingWs)
                               move s movingWs
            where ds = parsed s
                  ws = source s
@@ -183,7 +228,7 @@ moveWord' True s (x,y) w = do liftIO $ putStrLn $ show (map ident movingWs)
                                     move s' ws
     
 moveWord' False s (x,y) wd =
-  do --liftIO $ putStrLn $ show $ "foo: " ++ (show $ mousePos $ fromJust $ moving ws)
+  do -- liftIO $ putStrLn $ show $ "foo: " ++ (show $ mousePos $ fromJust $ moving ws)
      return $ s {source = ws'}
        where ws = source s
              ws' = fromMaybe ws $ 
@@ -203,37 +248,40 @@ moveWord' False s (x,y) wd =
                           y' = childY + moveY
                       return $ updateWord ws $ wd {location = (x',y')}
 
-inWord :: (Float, Float) -> Word -> Bool
-inWord (px,py) Word {size = (w,h), location = (x,y)} =
+inWord :: (Float, Float) -> TWord -> Bool
+inWord (px,py) TWord {size = (w,h), location = (x,y)} =
   and [px >= x, py >= y, px < x+w, py < y+h]
 
-instructionAt :: [Word] -> (Float, Float) -> Maybe Word
+instructionAt :: [TWord] -> (Float, Float) -> Maybe TWord
 instructionAt ws location = listToMaybe $ filter (inWord location) ws
 
-moving :: [Word] -> Maybe Word
+moving :: [TWord] -> Maybe TWord
 moving = listToMaybe . (filter (isJust . mousePos))
 
-updateAddWord :: [Word] -> Word -> [Word]
+updateAddWord :: [TWord] -> TWord -> [TWord]
 updateAddWord [] w = [w]
 updateAddWord (x:xs) i | ident x == ident i = (i:xs)
                        | otherwise = x:(updateAddWord xs i)
 
-updateWord :: [Word] -> Word -> [Word]
+updateWord :: [TWord] -> TWord -> [TWord]
 updateWord [] _ = []
 updateWord (x:xs) i | ident x == ident i = (i:xs)
                     | otherwise = x:(updateWord xs i)
 
-removeWord :: [Word] -> Word -> [Word]
+removeWord :: [TWord] -> TWord -> [TWord]
 removeWord ws w = filter (w /=) ws
 
-wordByIdent :: [Word] -> Int -> Word
+wordByIdent :: [TWord] -> Int -> TWord
 wordByIdent ds i = head $ filter (\d -> ident d == i) ds
+
+wordByIdent' :: [TWord] -> Int -> [TWord]
+wordByIdent' ds i = filter (\d -> ident d == i) ds
 
 isInside :: Integral a => Rect -> a -> a -> Bool
 isInside (Rect rx ry rw rh) x y = (x' > rx) && (x' < rx + rw) && (y' > ry) && (y' < ry + rh)
  where (x', y') = (fromIntegral x, fromIntegral y)
 
-setMouseOffset :: (Float, Float) -> Word -> Word
+setMouseOffset :: (Float, Float) -> TWord -> TWord
 setMouseOffset (x,y) w = w {mousePos = Just (x',y')}
   where x' = x - (fst $ location w)
         y' = y - (snd $ location w)
@@ -260,7 +308,7 @@ handleEvent s (MouseMotion x y _ _) =
 handleEvent scene (MouseButtonDown x y ButtonLeft) = 
   do scene' <- finishTyping scene
      mods <- liftIO getModState
-     liftIO $ putStrLn $ show mods
+     -- liftIO $ putStrLn $ show mods
      let word = clicked scene'
          startEdit = isJust word && ctrlDown mods
          word' = do w <- word
@@ -282,7 +330,7 @@ handleEvent scene (KeyDown k) =
 
 handleEvent scene _ = return scene
 
-typing :: Scene -> Word
+typing :: Scene -> TWord
 typing scene = 
   fromMaybe (makeTyping (source scene) (cursor scene)) 
             (getTyping (source scene))
@@ -299,7 +347,7 @@ updateSize i scene =
      return $ updateCursor w' $ withSource scene (\ws -> updateWord ws w')
   where w = wordByIdent (source scene) i
 
-updateCursor :: Word -> Scene -> Scene
+updateCursor :: TWord -> Scene -> Scene
 updateCursor w scene = scene {cursor = topRight w}
 
 handleKey :: Scene -> SDLKey -> Char -> [Modifier] -> AppEnv Scene
@@ -324,7 +372,7 @@ handleKey scene _ c _
   | isKey c = do let w = (typing scene) 
                      w' = w {token = (token w) ++ [c]}
                  updateSize (ident w') $ withSource scene (\ws -> updateAddWord ws w')
-  | otherwise = do liftIO $ putStrLn [c]
+  | otherwise = do -- liftIO $ putStrLn [c]
                    return scene
 
 isKey c = elem c s
@@ -335,7 +383,7 @@ isKey c = elem c s
                    ]
 
 
-resetPats :: [Word] -> [Word]
+resetPats :: [TWord] -> [TWord]
 resetPats = map (\w -> w {pat = Nothing})
 
 interpretPats :: Scene -> AppEnv Scene
@@ -363,11 +411,12 @@ data AppConfig = AppConfig {
   screen       :: Surface,
   font         :: Font,
   input        :: MVar Job,
-  oscOutput    :: MVar OscPattern,
+  -- oscOutput    :: MVar (ParamPattern),
   colourOutput :: MVar (Maybe (Pattern (Colour Double))),
   tempoMV      :: MVar (Tempo),
-  fr           :: FR.FPSManager
-  --mxyz         :: MVar (Float, Float, Float)
+  fr           :: FR.FPSManager,
+  mxyz         :: MVar (Float, Float, Float),
+  mEnergy      :: MVar Float
 }
 
 type AppState = StateT Scene IO
@@ -380,37 +429,43 @@ applySurface x y src dst clip = blitSurface src clip dst offset
 initEnv :: IO AppConfig
 initEnv = do    
     screen <- setVideoMode screenWidth screenHeight screenBpp [SWSurface]
-    font <- openFont "inconsolata.ttf" 18
+    font <- openFont "futura.ttf" 22
     setCaption "Texture" []
-    oscO <- dirtstart "texture"
+    (cps, getNow) <- bpsUtils
+    (oscO,_) <- superDirtSetters getNow
     colourO <- newEmptyMVar
-    i <- start oscO colourO
+    i <- Texture.Interp.start oscO colourO
     tempoMV <- tempoMVar
     fps <- FR.new
     FR.set fps 20
     FR.init fps
-    --m <- kateThread
-    return $ AppConfig screen font i oscO colourO tempoMV fps 
+    (m, mve) <- oscThread
+    return $ AppConfig screen font i colourO tempoMV fps m mve
 
 blankWidth = 0.015
 
 -- TODO - find out how to specify inaddr_any
-kateThread = do x <- udpServer "127.0.0.1" 1234
-                mv <- newMVar (0,0,0) 
-                forkIO $ kateLoop x mv
-                return mv
-  where kateLoop x mv = do m <- recvMessage x
-                           act m mv
-                           kateLoop x mv
-        act (Just (Message "/kill" [])) mv = 
-          do liftIO $ exitSuccess
-             putStrLn "*** END ***"
+oscThread = do x <- udpServer myIP 1234
+               mv <- newMVar (0,0,0) 
+               mve <- newMVar (0) 
+               forkIO $ oscLoop x mv mve
+               return (mv, mve)
+  where oscLoop x mv mve = do m <- recvMessage x
+                              act m mv mve
+                              oscLoop x mv mve
+        act (Just (Message "/kill" [])) mv mve = 
+          do putMVar mv (-1,-1,-1)
              return ()
-        act (Just (Message "/isadora/1" [Float x, Float y, Float z])) mv =
-          do putStrLn $ "got :" ++ show x ++ ", " ++ show y ++ ", " ++ show z
+        act (Just (Message "/energy" [Float x])) mv mve = 
+          do putMVar mve (x)
+             -- putStrLn "energy"
+             return ()
+        act (Just (Message "/isadora/1" [Float x, Float y, Float z])) mv mve =
+          do -- putStrLn $ "got :" ++ show x ++ ", " ++ show y ++ ", " ++ show z
              putMVar mv (x,y,z)
              return ()
-        act _ _ = return ()
+        act _ _ _ = do putStrLn "hm"
+                       return ()
 
 drawCursor :: Scene -> Font -> Surface -> Double -> IO ()
 drawCursor scene ft screen beat = 
@@ -419,7 +474,7 @@ drawCursor scene ft screen beat =
      fillRect screen (Just $ Rect x y w h) colour
      return ()
   where (x,y) = toScreen $ cursor scene
-        (w,h) = toScreen (blankWidth, 0.035)
+        (w,h) = toScreen (blankWidth * 1.2, blankWidth * 1.8)
         RGB r g b = hsv (hu*360) 0.7 0.99999
         foo x = floor $ x * 256
         hu = ((beat) `mod'` 1)
@@ -443,12 +498,18 @@ drawScene scene font screen beat =
         textColor = Color 255 255 255
 
 drawTree :: Scene -> Font -> Surface -> Double -> T.Datum -> IO ()
-drawTree scene font screen beat d = 
+drawTree scene font screen beat d 
+ | T.token d == "[" = mapM_ drawPlainLink links
+ | T.token d == "]" = mapM_ drawPlainLink links
+ | otherwise = 
   do mapM_ drawLink links
   where links = tails $ d:(T.children (parsed scene) d)
         drawLink [] = return ()
         drawLink (_:[]) = return ()
         drawLink ds@(a:b:_) = do mapM_ (drawLinkLine a b) (enumerate $ reverse $ tail ds)
+        drawPlainLink [] = return ()
+        drawPlainLink (_:[]) = return ()
+        drawPlainLink ds@(a:b:_) = do drawLinkLine a b (0, b)
         drawLinkLine a b (n, x) = 
           drawPat n x1 y1 x2 y2 p screen beat
           where (x1, y1) | a == d = bottomRight w
@@ -457,17 +518,17 @@ drawTree scene font screen beat d =
                 p = pat $ wordByDatum (source scene) x
         w = wordByDatum (source scene) d
 
-
-wordByDatum :: [Word] -> T.Datum -> Word
+wordByDatum :: [TWord] -> T.Datum -> TWord
 wordByDatum ws d = wordByIdent ws (T.ident d) 
  
 drawPat :: Int -> Float -> Float -> Float -> Float -> Maybe (Pattern (Colour Double)) -> Surface -> Double -> IO ()
 drawPat n x1 y1 x2 y2 (Nothing) screen _ = 
-  do (thickLine True n 0.014 x2 y2 x1 y1) screen lineColor
+  do (thickLine True n linesz x2 y2 x1 y1) screen lineColor
      return ()
   where lineColor = rgbColor 127 127 127
 
-drawPat n x1 y1 x2 y2 (Just p) screen beat = mapM_ drawEvents es
+drawPat n x1 y1 x2 y2 (Just p) screen beat = do mapM_ drawEvents es
+                                                --drawArc n x1 y1 x2 y2 (Just p) screen beat
   where es = map (\(_, (s,e), evs) -> ((max s pos, min e (pos + 1)), evs)) $ arc (segment2 p) (pos, pos + 1)
         constrain x = min (pos + 1) $ max x pos
         pos = toRational $ beat
@@ -476,13 +537,25 @@ drawPat n x1 y1 x2 y2 (Just p) screen beat = mapM_ drawEvents es
         drawEvents ((s,e), cs) = 
           mapM_ (\(n', (h, c)) -> drawEvent h (s,e) c n' (length cs)) (enumerate cs)
         drawEvent h (s,e) c n' scale = 
-          (thickLine h (n*scale+n') (0.014/ (fromIntegral scale))
+          (thickLine h (n*scale+n') (linesz/ (fromIntegral scale))
            (x1 + (xd * fromRational (e-pos)))
            (y1 + (yd * fromRational (e-pos)))
            (x1 + (xd * fromRational (s-pos))) 
            (y1 + (yd * fromRational (s-pos)))
           ) 
           screen (colourToPixel c)
+
+drawArc n x1 y1 x2 y2 Nothing screen beat = return ()
+drawArc n x1 y1 x2 y2 (Just p) screen beat = 
+  do let s = toRational $ beat
+         e = s + (1%20)
+         now = arc p (s,e)
+         colours = enumerate $ map (colourToPixel . thd') now
+         parts = length colours
+     mapM_ (drawPie (fromIntegral parts)) (mapFsts fromIntegral colours)
+     return ()
+       where (x,y) = toScreen16 (x1,y1)
+             drawPie parts (i, c) = SDLP.filledPie screen x y 10 (floor $ ((fromIntegral i)/(fromIntegral parts))*360) (floor $ (((fromIntegral i)+1)/(fromIntegral parts))*360) c
 
 segment2 :: Pattern a -> Pattern [(Bool, a)]
 segment2 p = Pattern $ \(s,e) -> filter (\(_, (s',e'),_) -> s' < e && e' > s) $ groupByTime (segment2' (arc (fmap (\x -> (True, x)) p) (s,e)))
@@ -546,36 +619,54 @@ thickLineArrow n thickness x1 y1 x2 y2 =
                         ((y2 - oy) + incY) - heady),
                        (x2+incX, y2+incY)
                       ]
-{-
+
+energise :: AppEnv ()
+energise = do m <- mEnergy `liftM` ask
+              scene <- get
+              e <- liftIO $ tryTakeMVar m
+              case e of Just v -> do let scene' = scene {source = map (addEnergy v) (source scene)}
+                                     evalScene scene' >>= put
+                                     return ()
+                        Nothing -> return ()
+  where addEnergy e w = w {energy = (energy w) + e}
+
+                      
 moveKate :: AppEnv ()
 moveKate = do kate <- mxyz `liftM` ask
               scene <- get
               xyz <- liftIO $ tryTakeMVar kate
-              if (isJust xyz) 
-                then do liftIO $ putStrLn "got xyz"
-                        let scene' = parseScene $ scene {source = setFirstXYZ (source scene) (fromJust xyz)}
-                        --let scene' = scene
-                        scene'' <- evalScene scene'
-                        put scene''
-                        return ()
-                else return ()
+              case xyz of Just (-1,-1,-1) -> do let scene' = Scene [] [] (0,0) (0.5,0.5)
+                                                scene'' <- evalScene scene'
+                                                put scene''
+                                                return ()
+                          Just (xyz') -> do -- liftIO $ putStrLn "got xyz"
+                                            let scene' = parseScene $ scene {source = setFirstXYZ (source scene) xyz'}
+                                            scene'' <- evalScene scene'
+                                            put scene''
+                                            return ()
+                          Nothing -> return ()
   where setFirstXYZ [] _ = []
         setFirstXYZ (ws) (x,y,z) | status w == Active = updateWord ws $ w {location = (x,y)}
         
                                  | otherwise = ws
-          where w = wordByIdent ws 0
--}
+          where w' = wordByIdent' ws 0
+                w | w' == [] = head ws
+                  | otherwise = head w'
+
 loop :: AppEnv ()
 loop = do
     quit <- whileEvents $ act
     --moveKate
+    energise
     screen <- screen `liftM` ask
     font <- font `liftM` ask
     tempoM <- tempoMV `liftM` ask
     fps <- fr `liftM` ask
     tempo <- liftIO $ readMVar tempoM
     beat <- liftIO $ beatNow tempo
-    scene <- get
+    preNudged <- get
+    scene <- liftIO $ (nudgeWords preNudged) >>= return . parseScene
+    put $ scene
     liftIO $ do
         bgColor  <- (mapRGB . surfaceGetPixelFormat) screen 0x00 0x00 0x00  
         clipRect <- Just `liftM` getClipRect screen
@@ -587,7 +678,7 @@ loop = do
     unless quit loop
       where act e = do scene <- get 
                        scene' <- handleEvent scene e
-                       put $ scene'
+                       put scene'
 
 whileEvents :: MonadIO m => (Event -> m ()) -> m Bool
 whileEvents act = do
@@ -607,16 +698,16 @@ textSize text font =
   do message <- renderTextSolid font text (Color 0 0 0)
      return (fromScreen (surfaceGetWidth message, surfaceGetHeight message))
 
-newWord :: Int -> String -> (Float, Float) -> Font -> WordStatus -> IO (Word)
+newWord :: Int -> String -> (Float, Float) -> Font -> WordStatus -> IO (TWord)
 newWord ident text location font status = setSize wd font
-  where wd = Word ident text location undefined Nothing status Nothing
+  where wd = TWord ident text location undefined Nothing status Nothing 0 0
 
-setSize :: Word -> Font -> IO Word
-setSize wd@(Word {token = ""}) _ = return wd {size = (0,0)}
+setSize :: TWord -> Font -> IO TWord
+setSize wd@(TWord {token = ""}) _ = return wd {size = (0,0)}
 setSize wd font = do sz <- textSize (token wd) font
                      return $ wd {size = sz}
 
-wordMenu :: Font -> [String] -> IO ([Word])
+wordMenu :: Font -> [String] -> IO ([TWord])
 wordMenu font ws = mapM addWord (enumerate ws)
   where addWord (n, w) = 
           newWord n w (xDivider + 0.005 + ((fromIntegral $ n `mod` 2) * (1 - xDivider) / 2), (fromIntegral (n `div` 2)) * 0.037) font MenuItem
@@ -630,8 +721,7 @@ run = withInit [InitEverything] $
            else do enableUnicode True
                    env <- initEnv
                    --ws <- wordMenu (font env) things
-                   let ws = []
-                   let scene = parseScene $ Scene ws [] (0,0) (0.5,0.5)
+                   let scene = parseScene $ Scene [] [] (0,0) (0.5,0.5)
                    --putStrLn $ show scene
                    runLoop env scene
 

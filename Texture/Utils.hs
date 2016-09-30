@@ -2,8 +2,8 @@ module Texture.Utils where
 
 import Data.List (sortBy)
 
-enumerate :: [a] -> [(Int, a)]
-enumerate = zip [0..]
+--enumerate :: [a] -> [(Int, a)]
+--enumerate = zip [0..]
 
 maybeHead [] = Nothing
 maybeHead (x:_) = Just x
