@@ -114,14 +114,13 @@ interpretPat T.Osc code =
 
 interpretPat _ _ = return Nothing
 
-unosc :: Pattern (Map.Map Param (Maybe Value)) -> Pattern String
+unosc :: ParamPattern -> Pattern String
 unosc p = (\x -> fromMaybe (show x) (soundString x)) <$> p
 
-soundString :: Map.Map Param (Maybe Value) -> Maybe [Char]
-soundString o = do m <- Map.lookup (S "sound" Nothing) o
-                   s <- m
+soundString :: Map.Map Param (Value) -> Maybe [Char]
+soundString o = do s <- Map.lookup (S "sound" Nothing) o
                    -- hack to turn ASCII into String
-                   return $ tail $ init $ show $ s
+                   return $ tail $ init $ show s
 
 
 {-
