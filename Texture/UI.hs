@@ -18,7 +18,7 @@ import Graphics.UI.SDL.TTF.Types
 import Data.Maybe (listToMaybe, fromMaybe, fromJust, isJust, catMaybes)
 import GHC.Int (Int16)
 import qualified Texture.Types as T
-import Data.List (intercalate, tails, nub)
+import Data.List (intercalate, tails, nub, groupBy, sortBy)
 import Data.Colour
 import Data.Colour.Names
 import Data.Colour.SRGB
@@ -31,17 +31,16 @@ import Data.Fixed (mod')
 import Control.Concurrent
 import System.Exit
 import System.Random (newStdGen, randomRs)
-import Sound.OSC.FD
+import qualified Sound.OSC.FD as O
+import Data.Function (on)
 
 import Texture.Utils
 import Texture.Interp (start, interpretPat, Job (OscJob, ColourJob))
 import Sound.Tidal.Stream
-import Sound.Tidal.OscStream
-import Sound.Tidal.Dirt (superDirtSetters)
 import Sound.Tidal.Pattern
 import Sound.Tidal.Tempo
-import qualified Sound.Tidal.Time as Time
-import Sound.Tidal.Utils
+import Sound.Tidal.Config
+import Sound.Tidal.Utils (enumerate)
 
 --myIP = "192.168.0.2"
 myIP = "127.0.0.1"
@@ -297,7 +296,7 @@ shiftDown mods = or $ map (\x -> elem x [KeyModLeftShift,
                                         ]
                           ) mods
 
-handleEvent :: Scene -> Event -> AppEnv (Scene)
+handleEvent :: Scene -> Graphics.UI.SDL.Event -> AppEnv (Scene)
 handleEvent s (MouseMotion x y _ _) = 
   do s' <- moveWord s xy
      return $ parseScene (s' {mouseXY = xy})
@@ -414,9 +413,9 @@ data AppConfig = AppConfig {
   -- oscOutput    :: MVar (ParamPattern),
   colourOutput :: MVar (Maybe (Pattern (Colour Double))),
   tempoMV      :: MVar (Tempo),
-  fr           :: FR.FPSManager,
-  mxyz         :: MVar (Float, Float, Float),
-  mEnergy      :: MVar Float
+  fr           :: FR.FPSManager
+  -- mxyz         :: MVar (Float, Float, Float),
+  -- mEnergy      :: MVar Float
 }
 
 type AppState = StateT Scene IO
@@ -431,20 +430,22 @@ initEnv = do
     screen <- setVideoMode screenWidth screenHeight screenBpp [SWSurface]
     font <- openFont "futura.ttf" 22
     setCaption "Texture" []
-    (cps, getNow) <- bpsUtils
-    (oscO,_) <- superDirtSetters getNow
+    tidal <- startTidal (superdirtTarget {oLatency = 0.15, oAddress = "127.0.0.1", oPort = 57120}) defaultConfig
+    let oscO = streamReplace tidal 1
+    -- (cps, getNow) <- bpsUtils
+    -- (oscO,_) <- superDirtSetters getNow
     colourO <- newEmptyMVar
     i <- Texture.Interp.start oscO colourO
-    tempoMV <- tempoMVar
+    let tempoMV  = sTempoMV tidal
     fps <- FR.new
     FR.set fps 20
     FR.init fps
-    (m, mve) <- oscThread
-    return $ AppConfig screen font i colourO tempoMV fps m mve
+    -- (m, mve) <- oscThread
+    return $ AppConfig screen font i colourO tempoMV fps -- m mve
 
 blankWidth = 0.015
 
--- TODO - find out how to specify inaddr_any
+{-
 oscThread = do x <- udpServer myIP 1234
                mv <- newMVar (0,0,0) 
                mve <- newMVar (0) 
@@ -453,22 +454,23 @@ oscThread = do x <- udpServer myIP 1234
   where oscLoop x mv mve = do m <- recvMessage x
                               act m mv mve
                               oscLoop x mv mve
-        act (Just (Message "/kill" [])) mv mve = 
+        act (Just (O.Message "/kill" [])) mv mve = 
           do putMVar mv (-1,-1,-1)
              return ()
-        act (Just (Message "/energy" [Float x])) mv mve = 
+        act (Just (O.Message "/energy" [O.Float x])) mv mve = 
           do putMVar mve (x)
              -- putStrLn "energy"
              return ()
-        act (Just (Message "/isadora/1" [Float x, Float y, Float z])) mv mve =
+        act (Just (O.Message "/isadora/1" [O.Float x, O.Float y, O.Float z])) mv mve =
           do -- putStrLn $ "got :" ++ show x ++ ", " ++ show y ++ ", " ++ show z
              putMVar mv (x,y,z)
              return ()
         act _ _ _ = do putStrLn "hm"
                        return ()
+-}
 
-drawCursor :: Scene -> Font -> Surface -> Double -> IO ()
-drawCursor scene ft screen beat = 
+drawCursor :: Scene -> Font -> Surface -> Sound.Tidal.Pattern.Time -> IO ()
+drawCursor scene ft screen cyc = 
   do  
      let colour  = rgbColor (foo r) (foo g) (foo b)
      fillRect screen (Just $ Rect x y w h) colour
@@ -477,12 +479,12 @@ drawCursor scene ft screen beat =
         (w,h) = toScreen (blankWidth * 1.2, blankWidth * 1.8)
         RGB r g b = hsv (hu*360) 0.7 0.99999
         foo x = floor $ x * 256
-        hu = ((beat) `mod'` 1)
+        hu = ((fromRational cyc) `mod'` 1)
 
 
-drawScene :: Scene -> Font -> Surface -> Double -> IO ()
-drawScene scene font screen beat = 
-  do mapM_ (drawTree scene font screen beat) top
+drawScene :: Scene -> Font -> Surface -> Sound.Tidal.Pattern.Time -> IO ()
+drawScene scene font screen cyc = 
+  do mapM_ (drawTree scene font screen cyc) top
      mapM_ (\i -> 
              do let (x, y) = toScreen $ location i
                     (w, h) = toScreen $ size i
@@ -493,12 +495,12 @@ drawScene scene font screen beat =
                   (floor $ (fromIntegral screenHeight) * (snd $ location i)) 
                   message screen Nothing
            ) (source scene)
-     drawCursor scene font screen beat
+     drawCursor scene font screen cyc
   where top = filter (T.hasChild) $ parsed scene
         textColor = Color 255 255 255
 
-drawTree :: Scene -> Font -> Surface -> Double -> T.Datum -> IO ()
-drawTree scene font screen beat d 
+drawTree :: Scene -> Font -> Surface -> Sound.Tidal.Pattern.Time -> T.Datum -> IO ()
+drawTree scene font screen cyc d 
  | T.token d == "[" = mapM_ drawPlainLink links
  | T.token d == "]" = mapM_ drawPlainLink links
  | otherwise = 
@@ -511,7 +513,7 @@ drawTree scene font screen beat d
         drawPlainLink (_:[]) = return ()
         drawPlainLink ds@(a:b:_) = do drawLinkLine a b (0, b)
         drawLinkLine a b (n, x) = 
-          drawPat n x1 y1 x2 y2 p screen beat
+          drawPat n x1 y1 x2 y2 p screen cyc
           where (x1, y1) | a == d = bottomRight w
                          | otherwise = T.location a
                 (x2, y2) = T.location b
@@ -521,54 +523,67 @@ drawTree scene font screen beat d
 wordByDatum :: [TWord] -> T.Datum -> TWord
 wordByDatum ws d = wordByIdent ws (T.ident d) 
  
-drawPat :: Int -> Float -> Float -> Float -> Float -> Maybe (Pattern (Colour Double)) -> Surface -> Double -> IO ()
+drawPat :: Int -> Float -> Float -> Float -> Float -> Maybe (Pattern (Colour Double)) -> Surface -> Rational -> IO ()
 drawPat n x1 y1 x2 y2 (Nothing) screen _ = 
   do (thickLine True n linesz x2 y2 x1 y1) screen lineColor
      return ()
   where lineColor = rgbColor 127 127 127
 
-drawPat n x1 y1 x2 y2 (Just p) screen beat = do mapM_ drawEvents es
-                                                --drawArc n x1 y1 x2 y2 (Just p) screen beat
-  where es = map (\(_, (s,e), evs) -> ((max s pos, min e (pos + 1)), evs)) $ arc (segment2 p) (pos, pos + 1)
-        constrain x = min (pos + 1) $ max x pos
-        pos = toRational $ beat
+drawPat n x1 y1 x2 y2 (Just p) screen cyc = do mapM_ drawEvents es
+                                               --drawArc n x1 y1 x2 y2 (Just p) screen cyc
+  where es = map (\ev@(Event _ (Arc s e) evs) -> ((max s cyc, min e (cyc + 1)),evs)) $ queryArc (segment2 p) (Arc cyc (cyc + 1))
+        constrain x = min (cyc + 1) $ max x cyc
         xd = x2 - x1
         yd = y2 - y1
         drawEvents ((s,e), cs) = 
           mapM_ (\(n', (h, c)) -> drawEvent h (s,e) c n' (length cs)) (enumerate cs)
         drawEvent h (s,e) c n' scale = 
           (thickLine h (n*scale+n') (linesz/ (fromIntegral scale))
-           (x1 + (xd * fromRational (e-pos)))
-           (y1 + (yd * fromRational (e-pos)))
-           (x1 + (xd * fromRational (s-pos))) 
-           (y1 + (yd * fromRational (s-pos)))
+           (x1 + (xd * fromRational (e-cyc)))
+           (y1 + (yd * fromRational (e-cyc)))
+           (x1 + (xd * fromRational (s-cyc))) 
+           (y1 + (yd * fromRational (s-cyc)))
           ) 
           screen (colourToPixel c)
 
-drawArc n x1 y1 x2 y2 Nothing screen beat = return ()
-drawArc n x1 y1 x2 y2 (Just p) screen beat = 
-  do let s = toRational $ beat
+drawArc n x1 y1 x2 y2 Nothing screen cyc = return ()
+drawArc n x1 y1 x2 y2 (Just p) screen cyc = 
+  do let s = cyc
          e = s + (1%20)
-         now = arc p (s,e)
-         colours = enumerate $ map (colourToPixel . thd') now
+         now = queryArc p (Arc s e)
+         colours = enumerate $ map (colourToPixel . value) now
          parts = length colours
      mapM_ (drawPie (fromIntegral parts)) (mapFsts fromIntegral colours)
      return ()
        where (x,y) = toScreen16 (x1,y1)
              drawPie parts (i, c) = SDLP.filledPie screen x y 10 (floor $ ((fromIntegral i)/(fromIntegral parts))*360) (floor $ (((fromIntegral i)+1)/(fromIntegral parts))*360) c
+             mapFst :: (a -> b) -> (a, c) -> (b, c)
+             mapFst f (x,y) = (f x,y)
+             mapFsts :: (a -> b) -> [(a, c)] -> [(b, c)]
+             mapFsts = map . mapFst
 
 segment2 :: Pattern a -> Pattern [(Bool, a)]
-segment2 p = Pattern $ \(s,e) -> filter (\(_, (s',e'),_) -> s' < e && e' > s) $ groupByTime (segment2' (arc (fmap (\x -> (True, x)) p) (s,e)))
+segment2 p = Pattern $ \(Sound.Tidal.Pattern.State (Arc s e) _) -> filter (\(Event _ (Arc s' e') _) -> s' < e && e' > s) $ groupByTime (segment2' (queryArc (fmap (\x -> (True, x)) p) (Arc s e)))
 
-
-segment2' :: [Time.Event (Bool, a)] -> [Time.Event (Bool, a)]
+groupByTime :: [Sound.Tidal.Pattern.Event a] -> [Sound.Tidal.Pattern.Event [a]]
+groupByTime es = map mrg $ groupBy ((==) `on` part) $ sortBy (compare `on` part) es
+  where mrg es@(e:_) = e {value = map value es}
+  
+segment2' :: [Sound.Tidal.Pattern.Event (Bool, a)] -> [Sound.Tidal.Pattern.Event (Bool, a)]
 segment2' es = foldr split2 es pts
   where pts = nub $ points es
+        points [] = []
+        points ((Event _ (Arc s e) _):es) = s:e:(points es)
 
-split2 :: Time.Time -> [Time.Event (Bool, a)] -> [Time.Event (Bool, a)]
+split2 :: Sound.Tidal.Pattern.Time -> [Sound.Tidal.Pattern.Event (Bool, a)] -> [Sound.Tidal.Pattern.Event (Bool, a)]
 split2 _ [] = []
-split2 t ((ev@(a, (s,e), (h,v))):es) | t > s && t < e = (a, (s,t),(h,v)):(a, (t,e),(False,v)):(split t es)
-                                  | otherwise = ev:split2 t es
+split2 t ((ev@(Event a (Arc s e) (h,v))):es) | t > s && t < e = (Event a (Arc s t) (h,v)):(Event a (Arc t e) (False,v)):(split t es)
+                                             | otherwise = ev:split2 t es
+
+split :: Sound.Tidal.Pattern.Time -> [Sound.Tidal.Pattern.Event a] -> [Sound.Tidal.Pattern.Event a]
+split _ [] = []
+split t ((ev@(Event a (Arc s e) v)):es) | t > s && t < e = (Event a (Arc s t) v):(Event a (Arc t e) v):(split t es)
+                                        | otherwise = ev:split t es
 
 thickLine :: Bool -> Int -> Float -> Float -> Float -> Float -> Float -> (Surface -> Pixel -> IO ())
 thickLine h n thickness x1 y1 x2 y2 = 
@@ -620,6 +635,7 @@ thickLineArrow n thickness x1 y1 x2 y2 =
                        (x2+incX, y2+incY)
                       ]
 
+{-
 energise :: AppEnv ()
 energise = do m <- mEnergy `liftM` ask
               scene <- get
@@ -629,8 +645,9 @@ energise = do m <- mEnergy `liftM` ask
                                      return ()
                         Nothing -> return ()
   where addEnergy e w = w {energy = (energy w) + e}
+-}
 
-                      
+{-
 moveKate :: AppEnv ()
 moveKate = do kate <- mxyz `liftM` ask
               scene <- get
@@ -652,18 +669,20 @@ moveKate = do kate <- mxyz `liftM` ask
           where w' = wordByIdent' ws 0
                 w | w' == [] = head ws
                   | otherwise = head w'
+-}
 
 loop :: AppEnv ()
 loop = do
     quit <- whileEvents $ act
     --moveKate
-    energise
+    -- energise
     screen <- screen `liftM` ask
     font <- font `liftM` ask
     tempoM <- tempoMV `liftM` ask
     fps <- fr `liftM` ask
     tempo <- liftIO $ readMVar tempoM
-    beat <- liftIO $ beatNow tempo
+    now <- O.time
+    let cyc = timeToCycles tempo now
     preNudged <- get
     scene <- liftIO $ (nudgeWords preNudged) >>= return . parseScene
     put $ scene
@@ -672,7 +691,7 @@ loop = do
         clipRect <- Just `liftM` getClipRect screen
         fillRect screen clipRect bgColor
         SDLP.aaLine screen (floor $ xDivider * (fromIntegral screenWidth)) 0 (floor $ xDivider * (fromIntegral screenWidth)) (fromIntegral screenHeight) (Pixel 0x00ffffff)
-        drawScene scene font screen beat 
+        drawScene scene font screen cyc
         Graphics.UI.SDL.flip screen
         FR.delay fps
     unless quit loop
@@ -680,7 +699,7 @@ loop = do
                        scene' <- handleEvent scene e
                        put scene'
 
-whileEvents :: MonadIO m => (Event -> m ()) -> m Bool
+whileEvents :: MonadIO m => (Graphics.UI.SDL.Event -> m ()) -> m Bool
 whileEvents act = do
     event <- liftIO pollEvent
     case event of

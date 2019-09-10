@@ -180,7 +180,7 @@ walkTreesWhere f ds = map (walkTree ds) $ tops
 walkTree :: [Datum] -> Datum -> String
 
 walkTree ds d@(Datum {token = "["}) = 
-  "(p \"" ++ contents ++ "\")"
+  "(parseBP_E \"" ++ contents ++ "\")"
   where contents = intercalate " " $ map token (tail $ offspring ds d)
 walkTree ds d@(Datum {token = "]"}) = ""
 
