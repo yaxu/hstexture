@@ -62,7 +62,7 @@ functions =
    ("-", numOp),
    ("/", floatOp),
    ("*", numOp),
-   ("|+|", Sig [] $ F (Pattern Osc) (F (Pattern Osc) (Pattern Osc))),
+   ("#", Sig [] $ F (Pattern Osc) (F (Pattern Osc) (Pattern Osc))),
    ("striate", Sig [] $ F Int (F (Pattern Osc) (Pattern Osc))),
    ("floor", Sig [] $ F Float Int),
    ("sinewave", floatPat),
@@ -84,6 +84,7 @@ functions =
    ("append'", Sig [WildCard] $ F (Pattern $ Param 0) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("silence", Sig [] $ Pattern WildCard),
    ("density", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
+   ("fast", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("slow", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("iter", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("spin", Sig [] $ F (Int) (F (Pattern $ Osc) (Pattern $ Osc))),
@@ -91,6 +92,11 @@ functions =
    ("<~", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("~>", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("every", Sig [WildCard] $ F (Int) 
+             (F (F (Pattern $ Param 0) (Pattern $ Param 0)) 
+                (F (Pattern $ Param 0) (Pattern $ Param 0))
+             )
+   ),
+   ("chunk", Sig [WildCard] $ F (Int) 
              (F (F (Pattern $ Param 0) (Pattern $ Param 0)) 
                 (F (Pattern $ Param 0) (Pattern $ Param 0))
              )
