@@ -35,12 +35,13 @@ import qualified Sound.OSC.FD as O
 import Data.Function (on)
 
 import Texture.Utils
-import Texture.Interp (start, interpretPat, Job (OscJob, ColourJob))
+import Texture.Interp (start, interpretPat, Job (WeaveJob, OscJob, ColourJob))
 import Sound.Tidal.Stream
 import Sound.Tidal.Pattern
 import Sound.Tidal.Tempo
 import Sound.Tidal.Config
 import Sound.Tidal.Utils (enumerate)
+import qualified Texture.Serial as L
 
 --myIP = "192.168.0.2"
 myIP = "127.0.0.1"
@@ -50,8 +51,8 @@ screenHeight = 768
 screenBpp    = 32
 linesz = 0.012
 
---xDivider = 0.75
-xDivider = 1
+xDivider = 0.75
+-- xDivider = 1
 
 data WordStatus = Active
                 | ActiveSelected
@@ -104,19 +105,22 @@ parseScene s =
 evalScene :: Scene -> AppEnv (Scene)
 evalScene scene = 
   do let s = parseScene $ scene
-         code = T.walkTreesWhere (T.isOscPattern . T.applied_as) (parsed s)
+         -- code = T.walkTreesWhere (T.isOscPattern . T.applied_as) (parsed s)
+         code = T.walkTreesWhere (T.isBits . T.applied_as)
+           (parsed s)
      -- liftIO $ T.printDists $ parsed s
      -- liftIO $ mapM_ (\d -> putStrLn $ T.token d ++ ": " ++ (show $ T.applied_as d)) (filter (not . T.hasParent) $ parsed s)
-     if (null code) 
-       then do i <- input `liftM` ask
-               liftIO $ putMVar i (OscJob "silence")
-               return s
-       else do let code' = "stack [" ++ (intercalate ", " code) ++ "]"
-               i <- input `liftM` ask
-               -- liftIO $ putStrLn $ "sending '" ++ code' ++ "'"
-               liftIO $ putMVar i (OscJob code')
-               s' <- interpretPats s
-               return s'
+     if (null code)
+       then (return s)
+       else (
+         do -- TODO Only one action I guess..
+           let code' = head code
+           i <- input `liftM` ask
+           -- liftIO $ putStrLn $ "sending '" ++ code' ++ "'"
+           liftIO $ putMVar i (WeaveJob code')
+           s' <- interpretPats s
+           return s'
+         )
 
 nextIdent :: [TWord] -> Int
 nextIdent ws = head $ filter (\i -> null $ filter ((== i) . ident) ws) [0 ..]
@@ -412,7 +416,8 @@ data AppConfig = AppConfig {
   input        :: MVar Job,
   -- oscOutput    :: MVar (ParamPattern),
   colourOutput :: MVar (Maybe (Pattern (Colour Double))),
-  tempoMV      :: MVar (Tempo),
+  loomMV       :: MVar L.Loom,
+  tempoMV      :: MVar Tempo,
   fr           :: FR.FPSManager
   -- mxyz         :: MVar (Float, Float, Float),
   -- mEnergy      :: MVar Float
@@ -432,16 +437,15 @@ initEnv = do
     setCaption "Texture" []
     tidal <- startTidal (superdirtTarget {oLatency = 0.15, oAddress = "127.0.0.1", oPort = 57120}) defaultConfig
     let oscO = streamReplace tidal 1
-    -- (cps, getNow) <- bpsUtils
-    -- (oscO,_) <- superDirtSetters getNow
     colourO <- newEmptyMVar
-    i <- Texture.Interp.start oscO colourO
+    loom <- L.loom
+    loomO <- newMVar loom
+    i <- Texture.Interp.start oscO colourO loomO
     let tempoMV  = sTempoMV tidal
     fps <- FR.new
     FR.set fps 20
     FR.init fps
-    -- (m, mve) <- oscThread
-    return $ AppConfig screen font i colourO tempoMV fps -- m mve
+    return $ AppConfig screen font i colourO loomO tempoMV fps
 
 blankWidth = 0.015
 
@@ -739,8 +743,8 @@ run = withInit [InitEverything] $
            then putStrLn "Failed to init ttf"
            else do enableUnicode True
                    env <- initEnv
-                   --ws <- wordMenu (font env) things
-                   let scene = parseScene $ Scene [] [] (0,0) (0.5,0.5)
+                   ws <- wordMenu (font env) things
+                   let scene = parseScene $ Scene ws [] (0,0) (0.5,0.5)
                    --putStrLn $ show scene
                    runLoop env scene
 

@@ -22,6 +22,8 @@ import Sound.Tidal.Stream
 import qualified Data.Map as Map
 import Control.Applicative
 import qualified Data.ByteString.Char8 as C
+import qualified Texture.Serial as L
+import qualified Texture.Weave as W
 
 import Data.Typeable
 --deriving instance Typeable Param
@@ -30,26 +32,29 @@ deriving instance Typeable Sound.OSC.FD.Datum
 
 data Job = OscJob String
          | ColourJob T.Type String
+         | WeaveJob String
 
-start :: (ControlPattern -> IO ()) -> MVar (Maybe (Pattern (Colour Double))) -> IO (MVar Job)
-start oscOut colourOut = do input <- newEmptyMVar
-                            forkIO $ loop input 
-                            return input
+start :: (ControlPattern -> IO ()) -> MVar (Maybe (Pattern (Colour Double))) -> MVar L.Loom -> IO (MVar Job)
+start oscOut colourOut loomOut
+  = do input <- newEmptyMVar
+       forkIO $ loop input 
+       return input
   where loop input = 
-          do r <- runInterpreter $ runI input oscOut colourOut
+          do r <- runInterpreter $ runI input oscOut colourOut loomOut
              case r of
                Left err -> printInterpreterError err
                Right () -> putStrLn "Eh?"
              loop input
 
 libs = [("Prelude", Nothing), 
-        ("Sound.Tidal.Context", Nothing),
-        ("Data.Map", Nothing), ("Sound.OSC", Nothing),
-        ("Control.Applicative", Nothing)
+        -- ("Sound.Tidal.Context", Nothing),
+        -- ("Data.Map", Nothing), ("Sound.OSC", Nothing),
+        -- ("Control.Applicative", Nothing),
+        ("Weave", Nothing)
        ]
 
-runI :: MVar Job -> (ControlPattern -> IO ()) -> MVar (Maybe (Pattern (Colour Double))) -> Interpreter ()
-runI input oscOut colourOut =
+runI :: MVar Job -> (ControlPattern -> IO ()) -> MVar (Maybe (Pattern (Colour Double))) -> MVar L.Loom -> Interpreter ()
+runI input oscOut colourOut loomOut =
     do
       --loadModules ["Stream.hs"]
       --setTopLevelModules ["SomeModule"]
@@ -61,16 +66,23 @@ runI input oscOut colourOut =
           --say =<< Language.Haskell.Interpreter.typeOf expr
           doJob thing
           loop
-        doJob (OscJob code) = do -- say ("interpreting: " ++ code)
+        doJob (OscJob code) = do say ("interpreting: " ++ code)
                                  p <- interpret code (as :: (ControlPattern))
                                  liftIO $ oscOut p
                                  return ()
-        doJob (ColourJob t code) = do -- say $ "interpreting: " ++ code ++ " type " ++ (show t)
+        doJob (WeaveJob code) =
+          do say ("weavecode: " ++ code)
+             bits <- interpret code (as :: [Bool])
+             liftIO $ do loom <- takeMVar loomOut
+                         let loom' = loom {L.lWeave = (L.lWeave loom) {W.wBits = bits}}
+                         putMVar loomOut loom'
+                         L.sendRow loom'
+             return ()
+        doJob (ColourJob t code) = do say $ "interpreting colour: " ++ code ++ " type " ++ (show t)
                                       p <- interpretPat t code
                                       -- say $ " as colour pattern: " ++ (show p)
                                       liftIO $ putMVar colourOut p
                                       return ()
-
 
 {-
 run2 :: String -> Interpreter (Pattern (Colour Double))

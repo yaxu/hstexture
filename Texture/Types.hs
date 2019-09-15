@@ -16,13 +16,17 @@ data Type =
   | String
   | Float
   | Int
+  | Bool
+  | Colour
   | Osc
+  | Action
   | OscStream
   | OneOf [Type]
   | Pattern Type
   | WildCard
   | Param Int
   | ListCon Type
+  | SimpleList Type
 
 instance Eq Type where
   F a a' == F b b' = and [a == b,
@@ -30,14 +34,18 @@ instance Eq Type where
                          ]
   String == String = True
   Float == Float = True
+  Bool == Bool = True
+  Colour == Colour = True
   Int == Int = True
   Osc == Osc = True
+  Action == Action = True
   OscStream == OscStream = True
   OneOf as == OneOf bs = as == bs
   Pattern a == Pattern b = a == b
   WildCard == WildCard = True
   Param a == Param b = a == b
   ListCon a == ListCon b = a == b
+  SimpleList a == SimpleList b = a == b
   _ == _ = False
 
 -- Type signature
@@ -62,76 +70,35 @@ functions =
    ("-", numOp),
    ("/", floatOp),
    ("*", numOp),
-   ("#", Sig [] $ F (Pattern Osc) (F (Pattern Osc) (Pattern Osc))),
-   ("striate", Sig [] $ F Int (F (Pattern Osc) (Pattern Osc))),
-   ("floor", Sig [] $ F Float Int),
-   ("sinewave", floatPat),
-   ("sinewave1", floatPat),
-   ("sine", floatPat),
-   ("sine1", floatPat),
-   ("run", Sig [] $ F Int (Pattern Int)),
-   ("fmap", mapper),
-   ("<$>", mapper),
-   ("<*>", Sig [WildCard, WildCard] $ F (Pattern $ F (Param 0) (Param 1)) (F (Pattern (Param 0)) (Pattern (Param 1)))),
-   ("sound", stringToOsc),
-   ("vowel", stringToOsc),
-   ("shape", floatToOsc),
-   ("speed", floatToOsc),
-   ("delay", floatToOsc),
-   ("pan", floatToOsc),
-   ("overlay", Sig [WildCard] $ F (Pattern $ Param 0) (F (Pattern $ Param 0) (Pattern $ Param 0))),
-   ("append", Sig [WildCard] $ F (Pattern $ Param 0) (F (Pattern $ Param 0) (Pattern $ Param 0))),
-   ("append'", Sig [WildCard] $ F (Pattern $ Param 0) (F (Pattern $ Param 0) (Pattern $ Param 0))),
-   ("silence", Sig [] $ Pattern WildCard),
-   ("density", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("fast", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("slow", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
-   ("iter", Sig [WildCard] $ F (Int) (F (Pattern $ Param 0) (Pattern $ Param 0))),
-   ("spin", Sig [] $ F (Int) (F (Pattern $ Osc) (Pattern $ Osc))),
-   ("stut", Sig [] $ F (Int) $ F (Float) $ F (Float) $ (F (Pattern Osc) (Pattern Osc))),
-   ("<~", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
-   ("~>", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
-   ("every", Sig [WildCard] $ F (Int) 
-             (F (F (Pattern $ Param 0) (Pattern $ Param 0)) 
-                (F (Pattern $ Param 0) (Pattern $ Param 0))
+   ("every", Sig [threadTypes] $ F (Int) 
+             (F (F (SimpleList $ Param 0) (SimpleList $ Param 0)) 
+                (F (SimpleList $ Param 0) (SimpleList $ Param 0))
              )
    ),
-   ("chunk", Sig [WildCard] $ F (Int) 
-             (F (F (Pattern $ Param 0) (Pattern $ Param 0)) 
-                (F (Pattern $ Param 0) (Pattern $ Param 0))
-             )
-   ),
-   ("jux", Sig 
-           []  
-           (F (F (Pattern Osc) (Pattern Osc))
-            (F (Pattern Osc) (Pattern Osc))
-           )
-   ),
-   ("superimpose", Sig []  
-                       (F (F (Pattern Osc) (Pattern Osc)) 
-                        (F (Pattern Osc) (Pattern Osc))
-                       )
-   ),
-   ("wedge", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (F (Pattern $ Param 0) (Pattern $ Param 0)))),
-   ("rev", Sig [WildCard] $ F (Pattern $ Param 0) (Pattern $ Param 0)),
-   ("brak", Sig [WildCard] $ F (Pattern $ Param 0) (Pattern $ Param 0)),
-   ("pick", Sig [] $ F String (F Int String)),
-   ("]", Sig [OneOf [String,Int,Float]] (ListCon (Param 0))),
-   ("[", Sig [OneOf [String,Int,Float]] (F (ListCon (Param 0)) (Pattern (Param 0))))
-  {-,
-   ("bd", prependString),
-   ("sn", prependString),
-   ("hc", prependString),
-   ("cp", prependString),
-   ("a", prependString),
-   ("e", prependString),
-   ("i", prependString),
-   ("o", prependString),
-   ("u", prependString),
-   ("gabba", prependString),
-   ("~", prependString)-}
+   ("cycle", Sig [threadTypes] $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
+   ("offset", Sig [threadTypes] $ F Int $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
+   ("rev", Sig [threadTypes] $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
+   ("double", Sig [threadTypes] $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
+   ("backforth", Sig [threadTypes] $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
+   ("shift", Sig [threadTypes] $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
+   ("invert", Sig [threadTypes] $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
+   (":", Sig [threadTypes] $ F (Param 0) (F (SimpleList (Param 0)) (SimpleList (Param 0)))),
+   ("[]", Sig [threadTypes] $ SimpleList (Param 0)),
+   ("up", Sig [] Bool),
+   ("down", Sig [] Bool),
+   ("red", Sig [] Colour),
+   ("orange", Sig [] Colour),
+   ("blue", Sig [] Colour),
+   ("2", Sig [] Int),
+   ("3", Sig [] Int),
+   ("4", Sig [] Int),
+   ("5", Sig [] Int),
+   ("weave", Sig [] $ F (SimpleList Colour) $ F (SimpleList Colour) $ F (SimpleList Bool) Action)
    ]
-  where numOp = Sig [number] $ F (Param 0) $ F (Param 0) (Param 0)
+  where threadTypes = OneOf [Bool,Colour]
+        numOp = Sig [number] $ F (Param 0) $ F (Param 0) (Param 0)
         floatOp = Sig [] $ F Float (F Float Float)
         floatPat = Sig [] $ Pattern Float
         mapper = Sig [WildCard, WildCard] $ F (F (Param 0) (Param 1)) $ F (Pattern (Param 0)) (Pattern (Param 1))
@@ -162,6 +129,9 @@ instance Show Type where
   show (F a b) = "(" ++ show a ++ " -> " ++ show b ++ ")"
   show String = "s"
   show Float = "f"
+  show Bool = "#"
+  show Action = "io"
+  show Colour = "c"
   show Int = "i"
   show (OneOf ts) = "?" ++ (show ts)
   show (Pattern t) = "p [" ++ (show t) ++ "]"
@@ -170,6 +140,7 @@ instance Show Type where
   show (Osc) = "osc"
   show (OscStream) = "stream"
   show (ListCon t) = "list [" ++ (show t) ++ "]"
+  show (SimpleList t) = "simplelist [" ++ (show t) ++ "]"
 
 printDists :: [Datum] -> IO ()
 printDists ds = mapM_ (\(a, b) -> putStrLn (token a ++ " -> " ++ token b ++ ": " ++ show (dist a b))) ps
@@ -264,7 +235,7 @@ hasChild = not . null . childIds
 
 instance Show Datum where
   show t = intercalate "\n" $ map (\(s, f) -> s ++ ": " ++ (f t))
-                                  [("ident", show . ident),
+           [("ident", show . ident),
                                    ("token", show . token),
                                    ("signature", show . sig),
                                    ("applied_as", show . applied_as),
@@ -281,6 +252,12 @@ instance Eq Datum where
 
 isOscPattern :: Sig -> Bool
 isOscPattern t = fits t (Sig [] $ Pattern Osc)
+
+isAction :: Sig -> Bool
+isAction t = fits t (Sig [] $ Action)
+
+isBits :: Sig -> Bool
+isBits t = fits t (Sig [] $ SimpleList Bool)
 
 value :: Datum -> String
 value x@(Datum {sig = (Sig {is = String})}) = "\"" ++ token x ++ "\""
@@ -309,13 +286,6 @@ stringToSig :: String -> Sig
 stringToSig s = fromMaybe def $ lookup s functions
   where def = Sig [] (stringToType s)
 
-{-
-stringToSig :: String -> Sig
-stringToSig s = fromMaybe def $ lookup s functions
-  where def | stringToType s == String = prependString
-            | otherwise = Sig [] (stringToType s)
--}
-
 fits :: Sig -> Sig -> Bool
 fits (Sig _ WildCard) _ = True
 fits _ (Sig _ WildCard) = True
@@ -335,10 +305,15 @@ fits (Sig pA (Pattern a)) (Sig pB (Pattern b)) = fits (Sig pA a) (Sig pB b)
 
 fits (Sig pA (ListCon a)) (Sig pB (ListCon b)) = fits (Sig pA a) (Sig pB b)
 
+fits (Sig pA (SimpleList a)) (Sig pB (SimpleList b)) = fits (Sig pA a) (Sig pB b)
+
 fits (Sig pA a) (Sig pB (Param b)) = fits (Sig pA a) (Sig pB (pB !! b))
 fits (Sig pA (Param a)) (Sig pB b) = fits (Sig pA (pA !! a)) (Sig pB b)
 
 fits (Sig _ Float) (Sig _ Float)   = True
+fits (Sig _ Bool) (Sig _ Bool)     = True
+fits (Sig _ Action) (Sig _ Action)     = True
+fits (Sig _ Colour) (Sig _ Colour) = True
 fits (Sig _ Int) (Sig _ Int)       = True
 fits (Sig _ String) (Sig _ String) = True
 fits (Sig _ OscStream) (Sig _ OscStream) = True
@@ -388,6 +363,9 @@ resolve (Sig pA (Pattern a)) (Sig pB (Pattern b)) = Sig pA' (Pattern a')
   where (Sig pA' a') =  resolve (Sig pA a) (Sig pB b)
 
 resolve (Sig pA (ListCon a)) (Sig pB (ListCon b)) = Sig pA' (ListCon a')
+  where (Sig pA' a') =  resolve (Sig pA a) (Sig pB b)
+
+resolve (Sig pA (SimpleList a)) (Sig pB (SimpleList b)) = Sig pA' (SimpleList a')
   where (Sig pA' a') =  resolve (Sig pA a) (Sig pB b)
 
 resolve a b = a
