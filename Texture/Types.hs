@@ -88,14 +88,17 @@ functions =
    ("[]", Sig [threadTypes] $ SimpleList (Param 0)),
    ("up", Sig [] Bool),
    ("down", Sig [] Bool),
-   ("red", Sig [] Colour),
-   ("orange", Sig [] Colour),
-   ("blue", Sig [] Colour),
+   -- ("red", Sig [] Colour),
+   -- ("orange", Sig [] Colour),
+   -- ("blue", Sig [] Colour),
    ("2", Sig [] Int),
    ("3", Sig [] Int),
    ("4", Sig [] Int),
    ("5", Sig [] Int),
-   ("weave", Sig [] $ F (SimpleList Colour) $ F (SimpleList Colour) $ F (SimpleList Bool) Action)
+   ("zipAnd", Sig [] $ F (SimpleList Bool) $ F (SimpleList Bool) $ SimpleList Bool),
+   ("zipOr", Sig [] $ F (SimpleList Bool) $ F (SimpleList Bool) $ SimpleList Bool),
+   ("zipXor", Sig [] $ F (SimpleList Bool) $ F (SimpleList Bool) $ SimpleList Bool)
+   -- ("weave", Sig [] $ F (SimpleList Colour) $ F (SimpleList Colour) $ F (SimpleList Bool) Action)
    ]
   where threadTypes = OneOf [Bool,Colour]
         numOp = Sig [number] $ F (Param 0) $ F (Param 0) (Param 0)

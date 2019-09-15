@@ -38,9 +38,13 @@ loom = do -- send <- openSerial dev
                         }
 
 
+rows :: Loom -> [[Bool]]
+rows = cycle . to2d . wBits . lWeave
+
 sendRow :: Loom -> IO ()
 sendRow loom =
-  do let r = (cycle $ to2d $ wBits $ lWeave loom) !! lRow loom
+  do let r = (rows loom) !! lRow loom
      putStrLn $ show $ take 16 r
      lSend loom r
      return ()
+

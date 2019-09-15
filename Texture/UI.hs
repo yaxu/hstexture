@@ -42,6 +42,7 @@ import Sound.Tidal.Tempo
 import Sound.Tidal.Config
 import Sound.Tidal.Utils (enumerate)
 import qualified Texture.Serial as L
+import qualified Weave as W
 
 --myIP = "192.168.0.2"
 myIP = "127.0.0.1"
@@ -51,6 +52,7 @@ screenHeight = 768
 screenBpp    = 32
 linesz = 0.012
 
+xDivider :: Float
 xDivider = 0.75
 -- xDivider = 1
 
@@ -371,12 +373,36 @@ handleKey scene SDLK_BACKSPACE _ _ =
 
 handleKey scene SDLK_DELETE c mods = handleKey scene SDLK_BACKSPACE c mods
 
-handleKey scene _ c _ 
+handleKey scene SDLK_RIGHT _ _ =
+  do loomM <- loomMV `liftM` ask
+     bumpLoom loomM 1
+     return scene
+
+handleKey scene SDLK_LEFT _ _ =
+  do loomM <- loomMV `liftM` ask
+     bumpLoom loomM (-1)
+     return scene
+
+handleKey scene SDLK_UP _ _ =
+  do loomM <- loomMV `liftM` ask
+     liftIO $ do loom <- readMVar loomM
+                 L.sendRow loom
+     return scene
+
+handleKey scene k c mods
   | isKey c = do let w = (typing scene) 
                      w' = w {token = (token w) ++ [c]}
                  updateSize (ident w') $ withSource scene (\ws -> updateAddWord ws w')
-  | otherwise = do -- liftIO $ putStrLn [c]
+  | otherwise = do liftIO $ putStrLn $ [c] ++ " " ++ show k
                    return scene
+
+bumpLoom :: MVar L.Loom -> Int -> AppEnv ()
+bumpLoom loomM n = do loomM <- loomMV `liftM` ask
+                      liftIO $ do loom <- takeMVar loomM
+                                  let row = max 0 $ (L.lRow loom) + n
+                                  L.sendRow loom
+                                  putMVar loomM $ loom {L.lRow = row}
+                      return ()
 
 isKey c = elem c s
   where s = concat [['a' .. 'z'],
@@ -486,8 +512,42 @@ drawCursor scene ft screen cyc =
         hu = ((fromRational cyc) `mod'` 1)
 
 
-drawScene :: Scene -> Font -> Surface -> Sound.Tidal.Pattern.Time -> IO ()
-drawScene scene font screen cyc = 
+rowWindow :: L.Loom -> (Int, [[Bool]])
+rowWindow loom = (L.lRow loom - start, rows)
+  where showRows = 12
+        start = max 0 (L.lRow loom - (showRows-6))
+        rows = take showRows $ drop start $ L.rows loom
+
+drawLoom :: Scene -> Font -> Surface -> L.Loom -> IO ()
+drawLoom scene font screen loom = 
+  do let (current, rows) = rowWindow loom
+     sequence_ $ map (drawLoomRow current) $ enumerate $ rows
+     let text = "row " ++ show (L.lRow loom)
+     message <- renderTextSolid font text (Color 255 255 255)
+     applySurface 
+       (toSx $ xDivider + border)
+       (toSy $ 0.9)
+       message screen Nothing
+     return ()
+  where drawLoomRow current (y', bits) =
+          do when (y' == current) $
+               do fillRect screen (Just $ Rect ((x-cellWidth)+ (toSx border)) (y+(y'*cellWidth)) (cellWidth*18) cellWidth) foreground
+                  return ()
+             sequence_ $ map (drawLoomCell y') $ enumerate bits
+                                    
+        drawLoomCell y' (x', bit) = fillRect screen (Just $ Rect (x+(x'*cellWidth)+ (toSx border)) (y+(y'*cellWidth)) cellWidth cellWidth) $ if bit then foreground else background
+        foreground  = (Pixel 0x00ffffff)
+        background  = (Pixel 0x00000000)
+        (x,y) = toScreen (xDivider, 0.6)
+        foo a = floor $ a * 256
+        border = 0.02
+        cellWidth = toSx $ (1-(xDivider+(border*2)))
+                           / (fromIntegral W.width)
+        toSx a = floor $ a * (fromIntegral screenWidth)
+        toSy a = floor $ a * (fromIntegral screenHeight)
+
+drawScene :: Scene -> Font -> Surface -> Sound.Tidal.Pattern.Time -> L.Loom -> IO ()
+drawScene scene font screen cyc loom = 
   do mapM_ (drawTree scene font screen cyc) top
      mapM_ (\i -> 
              do let (x, y) = toScreen $ location i
@@ -499,6 +559,7 @@ drawScene scene font screen cyc =
                   (floor $ (fromIntegral screenHeight) * (snd $ location i)) 
                   message screen Nothing
            ) (source scene)
+     drawLoom scene font screen loom
      drawCursor scene font screen cyc
   where top = filter (T.hasChild) $ parsed scene
         textColor = Color 255 255 255
@@ -684,6 +745,8 @@ loop = do
     font <- font `liftM` ask
     tempoM <- tempoMV `liftM` ask
     fps <- fr `liftM` ask
+    loomM <- loomMV `liftM` ask
+    loom <- liftIO $ readMVar loomM
     tempo <- liftIO $ readMVar tempoM
     now <- O.time
     let cyc = timeToCycles tempo now
@@ -695,7 +758,7 @@ loop = do
         clipRect <- Just `liftM` getClipRect screen
         fillRect screen clipRect bgColor
         SDLP.aaLine screen (floor $ xDivider * (fromIntegral screenWidth)) 0 (floor $ xDivider * (fromIntegral screenWidth)) (fromIntegral screenHeight) (Pixel 0x00ffffff)
-        drawScene scene font screen cyc
+        drawScene scene font screen cyc loom
         Graphics.UI.SDL.flip screen
         FR.delay fps
     unless quit loop
@@ -750,7 +813,7 @@ run = withInit [InitEverything] $
 
 
 colourToPixel :: Colour Double -> Pixel
-colourToPixel c =  rgbColor (floor $ 256*r) (floor $ 256* g) (floor $ 256*b)
+colourToPixel c =  rgbColor (floor $ 256*r) (floor $ 256*g) (floor $ 256*b)
   where (RGB r g b) = toSRGB c
 
 fi a = fromIntegral a
