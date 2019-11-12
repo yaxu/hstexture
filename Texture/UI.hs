@@ -120,8 +120,9 @@ evalScene scene =
            i <- input `liftM` ask
            -- liftIO $ putStrLn $ "sending '" ++ code' ++ "'"
            liftIO $ putMVar i (WeaveJob code')
-           s' <- interpretPats s
-           return s'
+           -- s' <- interpretPats s
+           -- return s'
+           return s
          )
 
 nextIdent :: [TWord] -> Int
@@ -400,8 +401,9 @@ bumpLoom :: MVar L.Loom -> Int -> AppEnv ()
 bumpLoom loomM n = do loomM <- loomMV `liftM` ask
                       liftIO $ do loom <- takeMVar loomM
                                   let row = max 0 $ (L.lRow loom) + n
-                                  L.sendRow loom
-                                  putMVar loomM $ loom {L.lRow = row}
+                                  let loom' = loom {L.lRow = row}
+                                  L.sendRow loom'
+                                  putMVar loomM $ loom' 
                       return ()
 
 isKey c = elem c s
@@ -415,13 +417,14 @@ isKey c = elem c s
 resetPats :: [TWord] -> [TWord]
 resetPats = map (\w -> w {pat = Nothing})
 
+{-
 interpretPats :: Scene -> AppEnv Scene
 interpretPats s = do ps <- pats
                      metaPs <- metaPats
                      let ws = foldr (Prelude.flip updateWord) (resetPats $ source s) (ps ++ metaPs)
                      return $ s {source = ws}
-  where isPatterned x = T.hasParent x && T.isPattern (T.appliedConcreteType x)
-        patterned = (filter isPatterned $ parsed s) :: [T.Datum]
+  where isBitted x = T.hasParent x && T.isBits (T.appliedConcreteType x)
+        bitted = (filter isBitted $ parsed s) :: [T.Datum]
         simpleJob d = runJob (d, (fromJust' $ T.patternType $ T.appliedConcreteType d), T.walkTree (parsed s) d)
         runJob (d, t, code) = 
           do let job = ColourJob t code
@@ -435,6 +438,7 @@ interpretPats s = do ps <- pats
         metas :: [(T.Datum, T.Type, String)]
         metas = catMaybes $ map (T.guessTransform (parsed s)) (parsed s)
         metaPats = mapM runJob metas
+-}
 
 data AppConfig = AppConfig {
   screen       :: Surface,
@@ -523,7 +527,7 @@ drawLoom scene font screen loom =
   do let (current, rows) = rowWindow loom
      sequence_ $ map (drawLoomRow current) $ enumerate $ rows
      let text = "row " ++ show (L.lRow loom)
-     message <- renderTextSolid font text (Color 255 255 255)
+     message <- renderTextShaded font text (Color 255 255 255) (Color 0 0 0)
      applySurface 
        (toSx $ xDivider + border)
        (toSy $ 0.9)
@@ -531,13 +535,14 @@ drawLoom scene font screen loom =
      return ()
   where drawLoomRow current (y', bits) =
           do when (y' == current) $
-               do fillRect screen (Just $ Rect ((x-cellWidth)+ (toSx border)) (y+(y'*cellWidth)) (cellWidth*18) cellWidth) foreground
+               do fillRect screen (Just $ Rect ((x-cellWidth)+ (toSx border)) (y+(y'*cellWidth)) (cellWidth*18) cellWidth) selected
                   return ()
              sequence_ $ map (drawLoomCell y') $ enumerate bits
                                     
         drawLoomCell y' (x', bit) = fillRect screen (Just $ Rect (x+(x'*cellWidth)+ (toSx border)) (y+(y'*cellWidth)) cellWidth cellWidth) $ if bit then foreground else background
         foreground  = (Pixel 0x00ffffff)
         background  = (Pixel 0x00000000)
+        selected  = (Pixel 0x000000ff)
         (x,y) = toScreen (xDivider, 0.6)
         foo a = floor $ a * 256
         border = 0.02
@@ -553,7 +558,7 @@ drawScene scene font screen cyc loom =
              do let (x, y) = toScreen $ location i
                     (w, h) = toScreen $ size i
                 fillRect screen (Just $ Rect x y w h) (Pixel 0x00333333)
-                message <- renderTextSolid font (token i) textColor
+                message <- renderTextShaded font (token i) textColor (Color 51 51 51)
                 applySurface 
                   (floor $ (fromIntegral screenWidth) * (fst $ location i)) 
                   (floor $ (fromIntegral screenHeight) * (snd $ location i)) 

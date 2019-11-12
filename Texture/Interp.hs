@@ -76,7 +76,7 @@ runI input oscOut colourOut loomOut =
              liftIO $ do loom <- takeMVar loomOut
                          let loom' = loom {L.lWeave = (L.lWeave loom) {W.wBits = bits}}
                          putMVar loomOut loom'
-                         L.sendRow loom'
+                         -- L.sendRow loom'
              return ()
         doJob (ColourJob t code) = do say $ "interpreting colour: " ++ code ++ " type " ++ (show t)
                                       p <- interpretPat t code

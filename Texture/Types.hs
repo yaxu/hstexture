@@ -70,8 +70,8 @@ functions =
    ("-", numOp),
    ("/", floatOp),
    ("*", numOp),
-   ("fast", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
-   ("slow", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
+   -- ("fast", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
+   -- ("slow", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("every", Sig [threadTypes] $ F (Int) 
              (F (F (SimpleList $ Param 0) (SimpleList $ Param 0)) 
                 (F (SimpleList $ Param 0) (SimpleList $ Param 0))
@@ -181,6 +181,10 @@ isListCon _ = False
 isPattern :: Type -> Bool
 isPattern (Pattern _) = True
 isPattern _ = False
+
+typeIsBits :: Type -> Bool
+typeIsBits (SimpleList Bool) = True
+typeIsBits _ = False
 
 isPatTransform :: Type -> Bool
 isPatTransform (F a b) = (isPattern a) && (isPattern b)
