@@ -539,11 +539,14 @@ drawLoom scene font screen loom =
                   return ()
              sequence_ $ map (drawLoomCell y') $ enumerate bits
                                     
-        drawLoomCell y' (x', bit) = fillRect screen (Just $ Rect (x+(x'*cellWidth)+ (toSx border)) (y+(y'*cellWidth)) cellWidth cellWidth) $ if bit then foreground else background
+        drawLoomCell y' (x', bit) = do fillRect screen (Just $ Rect (x+(x'*cellWidth)+ (toSx border)) (y+(y'*cellWidth)) cellWidth cellWidth) $ if bit then foreground else background
+                                       -- fillRect screen (Just $ Rect (x+(x'*cellWidth)+ (toSx border)) (y+(y'*cellWidth) + (toSy 0.23)) cellWidth cellWidth) $ if bit then (if (even y') then threada else threadb) else (if (even x') then threadb else threada)
         foreground  = (Pixel 0x00ffffff)
         background  = (Pixel 0x00000000)
+        threada  = (Pixel 0x00ffff00)
+        threadb  = (Pixel 0x000000ff)
         selected  = (Pixel 0x000000ff)
-        (x,y) = toScreen (xDivider, 0.6)
+        (x,y) = toScreen (xDivider, 0.55)
         foo a = floor $ a * 256
         border = 0.02
         cellWidth = toSx $ (1-(xDivider+(border*2)))
