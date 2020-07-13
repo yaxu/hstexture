@@ -399,8 +399,8 @@ sqr :: Num a => a -> a
 sqr x = x * x
 
 dist :: Datum -> Datum -> Float
-dist a b = sqrt ((sqr $ (fst $ applied_location a) - (fst $ location b))
-                 + (sqr $ (snd $ applied_location a) - (snd $ location b))
+dist f v = sqrt ((sqr $ (fst $ applied_location f) - (fst $ location v))
+                 + (sqr $ (snd $ applied_location f) - (snd $ location v))
                 )
            
 -- Recursively build the parse tree
@@ -417,16 +417,16 @@ link things = fmap ((updateLinks things) . snd) $ maybeHead $ sortByFst $ tmp
         fs = filter wantsParam things
 
 dists :: [Datum] -> Datum -> [(Float, (Datum, Datum))]
-dists things x = map (\fitter -> (dist x fitter, (x, fitter))) fitters
+dists values f = map (\fitter -> (dist f fitter, (f, fitter))) fitters
   where 
     fitters = filter 
-              (\thing -> 
-                (thing /= x 
+              (\value -> 
+                (value /= f 
                  && 
-                 fits (input $ applied_as x) (applied_as thing)
+                 fits (input $ applied_as f) (applied_as value)
                 )
               )
-              things
+              values
 
 -- Apply b to a, and resolve the wildcards and "oneof"s
 

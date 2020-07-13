@@ -47,8 +47,9 @@ import qualified Weave as W
 --myIP = "192.168.0.2"
 myIP = "127.0.0.1"
 
+-- TODO - if width /= height, euclidean distances don't work..
 screenWidth  = 1024
-screenHeight = 768
+screenHeight = 1024
 screenBpp    = 32
 linesz = 0.012
 
@@ -604,7 +605,7 @@ drawPat n x1 y1 x2 y2 (Nothing) screen _ =
 
 drawPat n x1 y1 x2 y2 (Just p) screen cyc = do mapM_ drawEvents es
                                                --drawArc n x1 y1 x2 y2 (Just p) screen cyc
-  where es = map (\ev@(Event _ (Arc s e) evs) -> ((max s cyc, min e (cyc + 1)),evs)) $ queryArc (segment2 p) (Arc cyc (cyc + 1))
+  where es = map (\ev@(Event _ _ (Arc s e) evs) -> ((max s cyc, min e (cyc + 1)),evs)) $ queryArc (segment2 p) (Arc cyc (cyc + 1))
         constrain x = min (cyc + 1) $ max x cyc
         xd = x2 - x1
         yd = y2 - y1
@@ -636,7 +637,7 @@ drawArc n x1 y1 x2 y2 (Just p) screen cyc =
              mapFsts = map . mapFst
 
 segment2 :: Pattern a -> Pattern [(Bool, a)]
-segment2 p = Pattern $ \(Sound.Tidal.Pattern.State (Arc s e) _) -> filter (\(Event _ (Arc s' e') _) -> s' < e && e' > s) $ groupByTime (segment2' (queryArc (fmap (\x -> (True, x)) p) (Arc s e)))
+segment2 p = Pattern $ \(Sound.Tidal.Pattern.State (Arc s e) _) -> filter (\(Event _ _ (Arc s' e') _) -> s' < e && e' > s) $ groupByTime (segment2' (queryArc (fmap (\x -> (True, x)) p) (Arc s e)))
 
 groupByTime :: [Sound.Tidal.Pattern.Event a] -> [Sound.Tidal.Pattern.Event [a]]
 groupByTime es = map mrg $ groupBy ((==) `on` part) $ sortBy (compare `on` part) es
@@ -646,17 +647,17 @@ segment2' :: [Sound.Tidal.Pattern.Event (Bool, a)] -> [Sound.Tidal.Pattern.Event
 segment2' es = foldr split2 es pts
   where pts = nub $ points es
         points [] = []
-        points ((Event _ (Arc s e) _):es) = s:e:(points es)
+        points ((Event _ _ (Arc s e) _):es) = s:e:(points es)
 
 split2 :: Sound.Tidal.Pattern.Time -> [Sound.Tidal.Pattern.Event (Bool, a)] -> [Sound.Tidal.Pattern.Event (Bool, a)]
 split2 _ [] = []
-split2 t ((ev@(Event a (Arc s e) (h,v))):es) | t > s && t < e = (Event a (Arc s t) (h,v)):(Event a (Arc t e) (False,v)):(split t es)
-                                             | otherwise = ev:split2 t es
+split2 t ((ev@(Event c a (Arc s e) (h,v))):es) | t > s && t < e = (Event c a (Arc s t) (h,v)):(Event c a (Arc t e) (False,v)):(split t es)
+                                               | otherwise = ev:split2 t es
 
 split :: Sound.Tidal.Pattern.Time -> [Sound.Tidal.Pattern.Event a] -> [Sound.Tidal.Pattern.Event a]
 split _ [] = []
-split t ((ev@(Event a (Arc s e) v)):es) | t > s && t < e = (Event a (Arc s t) v):(Event a (Arc t e) v):(split t es)
-                                        | otherwise = ev:split t es
+split t ((ev@(Event c a (Arc s e) v)):es) | t > s && t < e = (Event c a (Arc s t) v):(Event c a (Arc t e) v):(split t es)
+                                          | otherwise = ev:split t es
 
 thickLine :: Bool -> Int -> Float -> Float -> Float -> Float -> Float -> (Surface -> Pixel -> IO ())
 thickLine h n thickness x1 y1 x2 y2 = 

@@ -36,8 +36,8 @@ dev = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__0043_557363239393515181E2-
 loom :: IO (Loom)
 loom = do send <- openSerial dev
           return $ Loom {lWeave = defaultWeave,
-                         lRow = 0
-                         , lSend = send
+                         lRow = 0,
+                         lSend = send
                         }
 
 
