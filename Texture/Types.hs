@@ -352,7 +352,6 @@ simplify (OneOf (x:[])) = x
 simplify (OneOf xs) = OneOf $ nub xs
 simplify x = x
 
-
 -- Resolve type signature a being applied to a function with type
 -- signature b. At this point we know they're compatible, but type
 -- parameters and "OneOf"s need resolving.
