@@ -27,6 +27,7 @@ data Type =
   | Param Int
   | ListCon Type
   | SimpleList Type
+  | BinaryList
 
 instance Eq Type where
   F a a' == F b b' = and [a == b,
@@ -40,6 +41,7 @@ instance Eq Type where
   Osc == Osc = True
   Action == Action = True
   OscStream == OscStream = True
+  BinaryList == BinaryList = True
   OneOf as == OneOf bs = as == bs
   Pattern a == Pattern b = a == b
   WildCard == WildCard = True
@@ -66,10 +68,14 @@ showFunctions = concatMap f functions
 
 functions :: [(String, Sig)]
 functions = 
-  [("+", numOp),
-   ("-", numOp),
-   ("/", floatOp),
-   ("*", numOp),
+  [-- ("+", numOp),
+   -- ("-", numOp),
+   -- ("/", floatOp),
+   -- ("*", numOp),
+   ("list", Sig [] $ F BinaryList (SimpleList Bool)),
+   ("stop", Sig [] BinaryList),
+   ("Up", Sig [] $ F BinaryList BinaryList),
+   ("Down", Sig [] $ F BinaryList BinaryList),
    -- ("fast", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    -- ("slow", Sig [WildCard] $ F (Float) (F (Pattern $ Param 0) (Pattern $ Param 0))),
    ("every", Sig [threadTypes] $ F (Int) 
@@ -77,27 +83,27 @@ functions =
                 (F (SimpleList $ Param 0) (SimpleList $ Param 0))
              )
    ),
-   ("cycle", Sig [threadTypes] $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
-   ("offset", Sig [threadTypes] $ F Int $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
+   -- ("cycle", Sig [threadTypes] $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
+   -- ("offset", Sig [threadTypes] $ F Int $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
    ("rev", Sig [threadTypes] $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
    ("double", Sig [threadTypes] $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
    ("backforth", Sig [threadTypes] $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
    ("shift", Sig [threadTypes] $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
    ("invert", Sig [threadTypes] $ F (SimpleList $ Param 0) (SimpleList $ Param 0)),
-   (":", Sig [threadTypes] $ F (Param 0) (F (SimpleList (Param 0)) (SimpleList (Param 0)))),
-   ("[]", Sig [threadTypes] $ SimpleList (Param 0)),
-   ("up", Sig [] Bool),
-   ("down", Sig [] Bool),
+   -- (":", Sig [threadTypes] $ F (Param 0) (F (SimpleList (Param 0)) (SimpleList (Param 0)))),
+   -- ("[]", Sig [threadTypes] $ SimpleList (Param 0)),
+   -- ("up", Sig [] Bool),
+   -- ("down", Sig [] Bool),
    -- ("red", Sig [] Colour),
    -- ("orange", Sig [] Colour),
    -- ("blue", Sig [] Colour),
    ("2", Sig [] Int),
    ("3", Sig [] Int),
    ("4", Sig [] Int),
-   ("5", Sig [] Int),
-   ("zipAnd", Sig [] $ F (SimpleList Bool) $ F (SimpleList Bool) $ SimpleList Bool),
-   ("zipOr", Sig [] $ F (SimpleList Bool) $ F (SimpleList Bool) $ SimpleList Bool),
-   ("zipXor", Sig [] $ F (SimpleList Bool) $ F (SimpleList Bool) $ SimpleList Bool)
+   ("5", Sig [] Int)
+   -- ("zipAnd", Sig [] $ F (SimpleList Bool) $ F (SimpleList Bool) $ SimpleList Bool),
+   -- ("zipOr", Sig [] $ F (SimpleList Bool) $ F (SimpleList Bool) $ SimpleList Bool),
+   -- ("zipXor", Sig [] $ F (SimpleList Bool) $ F (SimpleList Bool) $ SimpleList Bool)
    -- ("weave", Sig [] $ F (SimpleList Colour) $ F (SimpleList Colour) $ F (SimpleList Bool) Action)
    ]
   where threadTypes = OneOf [Bool,Colour]
@@ -108,7 +114,7 @@ functions =
         stringToOsc = Sig [] $ F (Pattern String) (Pattern Osc)
         floatToOsc = Sig [] $ F (Pattern Float) (Pattern Osc)
 
-{-
+{-:
 prepender a = Sig [] $ F (List a) (List a)
 prependString = prepender String
 -}
@@ -144,6 +150,7 @@ instance Show Type where
   show (OscStream) = "stream"
   show (ListCon t) = "list [" ++ (show t) ++ "]"
   show (SimpleList t) = "simplelist [" ++ (show t) ++ "]"
+  show (BinaryList) = "binarylist"
 
 printDists :: [Datum] -> IO ()
 printDists ds = mapM_ (\(a, b) -> putStrLn (token a ++ " -> " ++ token b ++ ": " ++ show (dist a b))) ps
@@ -325,6 +332,7 @@ fits (Sig _ Int) (Sig _ Int)       = True
 fits (Sig _ String) (Sig _ String) = True
 fits (Sig _ OscStream) (Sig _ OscStream) = True
 fits (Sig _ Osc) (Sig _ Osc) = True
+fits (Sig _ BinaryList) (Sig _ BinaryList) = True
 
 fits _ _ = False
 

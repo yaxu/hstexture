@@ -37,19 +37,20 @@ import Data.Function (on)
 import Texture.Utils
 import Texture.Interp (start, interpretPat, Job (WeaveJob, OscJob, ColourJob))
 import Sound.Tidal.Stream
+import Sound.Tidal.Carabiner
 import Sound.Tidal.Pattern
 import Sound.Tidal.Tempo
 import Sound.Tidal.Config
 import Sound.Tidal.Utils (enumerate)
 import qualified Texture.Serial as L
 import qualified Weave as W
-
+  
 --myIP = "192.168.0.2"
 myIP = "127.0.0.1"
 
 -- TODO - if width /= height, euclidean distances don't work..
 screenWidth  = 1024
-screenHeight = 1024
+screenHeight = 720
 screenBpp    = 32
 linesz = 0.012
 
@@ -65,15 +66,15 @@ data WordStatus = Active
                 deriving (Show, Eq)
 
 data TWord = TWord {ident :: Int,
-                  token :: String,
-                  location :: (Float, Float),
-                  size :: (Float, Float),
-                  mousePos :: Maybe (Float, Float),
-                  status :: WordStatus,
-                  pat :: Maybe (Pattern (Colour Double)),
-                  energy :: Float,
-                  angle :: Float
-                 }
+                    token :: String,
+                    location :: (Float, Float),
+                    size :: (Float, Float),
+                    mousePos :: Maybe (Float, Float),
+                    status :: WordStatus,
+                    pat :: Maybe (Pattern (Colour Double)),
+                    energy :: Float,
+                    angle :: Float
+                   }
 
 instance Eq TWord where
   (TWord {ident = a}) == (TWord {ident = b}) = a == b
@@ -170,6 +171,8 @@ clearMouseOffset = (map clearTentative) . (map f) . (filter filtF)
   where f i = i {mousePos = Nothing}
         filtF i@(TWord {status = Tentative, location = (x,_), size = (w,_)}) 
           = (x + w) <= xDivider
+        filtF i@(TWord {status = Active, location = (x,_), size = (w,_)}) 
+          = (x + w) <= xDivider
         filtF _ = True
         clearTentative i@(TWord {status = Tentative}) = i {status = Active}
         clearTentative i = i
@@ -245,8 +248,9 @@ moveWord' False s (x,y) wd =
                       (pxOffset, pyOffset) <- mousePos parent
                       let (w,h) = size parent
                           (parentX, parentY) = location parent
-                          parentX' | status parent == Tentative = (x-pxOffset)
-                                   | otherwise = max 0 $ min (xDivider - w) (x - pxOffset)
+ --                         parentX' | status parent == Tentative = (x-pxOffset)
+--                                   | otherwise = max 0 $ min (xDivider - w) (x - pxOffset)
+                          parentX' = max 0 $ min (1 - w) $ x-pxOffset
                           parentY' = max 0 $ min (1 - h) $ y - pyOffset
                           moveX = parentX' - parentX
                           moveY = parentY' - parentY
@@ -317,7 +321,7 @@ handleEvent scene (MouseButtonDown x y ButtonLeft) =
      mods <- liftIO getModState
      -- liftIO $ putStrLn $ show mods
      let word = clicked scene'
-         startEdit = isJust word && ctrlDown mods
+         startEdit = False -- isJust word && ctrlDown mods
          word' = do w <- word
                     let w' | ctrlDown mods = w {status = Typing}
                            | otherwise = w
@@ -387,8 +391,7 @@ handleKey scene SDLK_LEFT _ _ =
 
 handleKey scene SDLK_UP _ _ =
   do loomM <- loomMV `liftM` ask
-     liftIO $ do loom <- readMVar loomM
-                 L.sendRow loom
+     bumpLoom loomM 0
      return scene
 
 handleKey scene k c mods
@@ -399,12 +402,25 @@ handleKey scene k c mods
                    return scene
 
 bumpLoom :: MVar L.Loom -> Int -> AppEnv ()
-bumpLoom loomM n = do loomM <- loomMV `liftM` ask
+bumpLoom loomM n = do tempoM <- tempoMV `liftM` ask
+                      tempo <- liftIO $ readMVar tempoM
+                      now <- O.time
+                      let cyc = timeToCycles tempo now
+                          q = 1
+                          s = floor cyc
+                          prev = s - (s `mod` q)
+                          next = prev + q
+                          cycDelay = (toRational $ (s - (s `mod` q)) + q) - cyc
+                          secDelay = cycDelay / (toRational $ cps tempo)
+                          toDouble :: Rational -> Double
+                          toDouble = fromRational
+                      liftIO $ putStrLn $ "delay: " ++ show (toDouble secDelay) ++ " cyc: " ++ show (toDouble cyc) ++ " next: " ++ show next ++ " prev: " ++ show prev
+                      liftIO $ threadDelay $ floor (secDelay * 1000000)
                       liftIO $ do loom <- takeMVar loomM
                                   let row = max 0 $ (L.lRow loom) + n
                                   let loom' = loom {L.lRow = row}
-                                  L.sendRow loom'
-                                  putMVar loomM $ loom' 
+                                  L.sendRow (toRational $ cps tempo) loom'
+                                  putMVar loomM $ loom'
                       return ()
 
 isKey c = elem c s
@@ -468,6 +484,7 @@ initEnv = do
     setCaption "Texture" []
     tidal <- startTidal (superdirtTarget {oLatency = 0.15, oAddress = "127.0.0.1", oPort = 57120}) defaultConfig
     let oscO = streamReplace tidal 1
+    -- _ <- carabiner tidal 4 0
     colourO <- newEmptyMVar
     loom <- L.loom
     loomO <- newMVar loom

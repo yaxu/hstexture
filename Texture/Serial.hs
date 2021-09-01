@@ -31,13 +31,15 @@ data Loom = Loom {lWeave :: Weave,
                   lSend :: ([Bool] -> IO ())
                  }
 
+-- dev = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__0043_557363239393515181E2-if00"
 dev = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__0043_557363239393515181E2-if00"
 
 loom :: IO (Loom)
-loom = do send <- openSerial dev
+loom = do -- send <- openSerial dev
           return $ Loom {lWeave = defaultWeave,
-                         lRow = 0,
-                         lSend = send
+                         lRow = 0
+                         -- ,
+                         -- lSend = send
                         }
 
 
@@ -46,12 +48,12 @@ rows = safeCycle . to2d . wBits . lWeave
   where safeCycle [] = []
         safeCycle x = cycle x
 
-sendRow :: Loom -> IO ()
-sendRow loom =
+sendRow :: Rational -> Loom -> IO ()
+sendRow cps loom =
   do putStrLn "Sending row"
      let r = ((rows loom) ++ (repeat [])) !! lRow loom
      putStrLn $ show $ take 16 $ r ++ repeat False
-     lSend loom r
+     --lSend loom r
      putStrLn "Sent."
      return ()
 
