@@ -595,7 +595,8 @@ drawTree scene font screen cyc d
  | T.token d == "[" = mapM_ drawPlainLink links
  | T.token d == "]" = mapM_ drawPlainLink links
  | otherwise = 
-  do mapM_ drawLink links
+--  do mapM_ drawLink links
+  do mapM_ drawPlainLink links
   where links = tails $ d:(T.children (parsed scene) d)
         drawLink [] = return ()
         drawLink (_:[]) = return ()
@@ -616,9 +617,10 @@ wordByDatum ws d = wordByIdent ws (T.ident d)
  
 drawPat :: Int -> Float -> Float -> Float -> Float -> Maybe (Pattern (Colour Double)) -> Surface -> Rational -> IO ()
 drawPat n x1 y1 x2 y2 (Nothing) screen _ = 
-  do (thickLine True n linesz x2 y2 x1 y1) screen lineColor
+--  do (thickLine True n linesz x2 y2 x1 y1) screen lineColor
+  do (thickLineArrow n 0.009 x1 y1 x2 y2) screen lineColor
      return ()
-  where lineColor = rgbColor 127 127 127
+  where lineColor = rgbColor 240 240 255
 
 drawPat n x1 y1 x2 y2 (Just p) screen cyc = do mapM_ drawEvents es
                                                --drawArc n x1 y1 x2 y2 (Just p) screen cyc

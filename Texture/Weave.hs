@@ -12,7 +12,7 @@ data Weave = Weave {wWarp :: [Colour Double],
 defaultWeave :: Weave
 defaultWeave = Weave {wWarp = [black],
                       wWeft = [white],
-                      wBits = cycle [up, down]
+                      wBits = cycle [down]
                      }
 
 up :: Bool
