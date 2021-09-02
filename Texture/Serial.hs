@@ -10,15 +10,15 @@ heddleMap = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15]
 
 openSerial :: String -> IO ([Bool] -> IO ())
 openSerial dev = do port <- SP.openSerial dev (SP.defaultSerialSettings
-                                               {SP.commSpeed = SP.CS9600}
+                                               {SP.commSpeed = SP.CS115200}
                                               )
                     return $ _send port
 
 _send :: SP.SerialPort -> [Bool] -> IO ()
 _send port bits = 
-  do putStrLn "foo"
+  do 
+     putStrLn $ "sending " ++ str ++ "x"
      SP.send port $ B.pack $ str ++ "x"
-     putStrLn "bar"
      return ()
        where
          str = map (toChar . ((bits ++ repeat False) !!)) heddleMap
