@@ -35,11 +35,11 @@ data Loom = Loom {lWeave :: Weave,
 dev = "/dev/serial/by-id/usb-Arduino__www.arduino.cc__0043_557363239393515181E2-if00"
 
 loom :: IO (Loom)
-loom = do -- send <- openSerial dev
+loom = do send <- openSerial dev
           return $ Loom {lWeave = defaultWeave,
                          lRow = 0
-                         -- ,
-                         -- lSend = send
+                         ,
+                         lSend = send
                         }
 
 
@@ -53,7 +53,7 @@ sendRow cps loom =
   do putStrLn "Sending row"
      let r = ((rows loom) ++ (repeat [])) !! lRow loom
      putStrLn $ show $ take 16 $ r ++ repeat False
-     --lSend loom r
+     lSend loom r
      putStrLn "Sent."
      return ()
 
